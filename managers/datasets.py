@@ -31,14 +31,12 @@ class Dataset(object):
     '''
 
     def __init__(self, location, is_raw=True, exists=True):
-        
-        # public properties
-
-        # location is either a filepath (for single TIFs) 
-        # or a directory (for Landsat scenes)
 
         # remove any trailing slashes
         location = re.sub(r'%s*$' % os.sep, '', location)
+
+        # location is either a filepath (for single TIFs) 
+        # or a directory (for Landsat scenes)
         self.location = location
 
         # whether the dataset is raw
@@ -75,7 +73,7 @@ class GeoTIFF(Dataset):
 
     def filepath(self, *args):
         '''
-        filepath to the TIF file
+        filepath to the TIFF file
         (*args ensures consistency with LandsatScene.filepath)
         '''
         return self.location
@@ -106,17 +104,17 @@ class LandsatScene(Dataset):
 
         self.expected_bands = set(map(str, satellite_bands[self.satellite]))
         
-        if not os.path.isdir(self.location):
-            if self.exists:
+        if self.exists:         
+            if not os.path.isdir(self.location):
                 raise ValueError('%s is not a directory' % self.location)
-            os.makedirs(self.location)
+        else:
+            os.makedirs(self.location, exist_ok=True)
 
         # the dataset name is the directory name
         self.name = os.path.split(self.location)[-1]
-
-        self._band_filepaths = {}
         
-        # if the scene exists, find each band's file
+        # find the filename for each band
+        self._band_filepaths = {}
         if self.exists:    
             filepaths = glob.glob(os.path.join(location, '*.TIF'))
             for filepath in filepaths:
@@ -128,12 +126,12 @@ class LandsatScene(Dataset):
                     print('Warning: unexpected filename %s in scene %s' % \
                           (filepath.split(os.sep)[-1], self.name))
             
-            # check for expected bands
             self._validate()
 
     
     def _validate(self):
         
+        # check for expected and unexpected bands
         existing_bands = set(self._band_filepaths.keys())
         missing_bands = self.expected_bands.difference(existing_bands)
         unexpected_bands = existing_bands.difference(self.expected_bands)
@@ -146,7 +144,14 @@ class LandsatScene(Dataset):
             print('Warning: found unexpected bands: %s' % \
                   sorted(list(unexpected_bands)))
 
+        # verify that filenames are consistent
+        filenames = [filename.replace('_B%s.TIF' % band, '') 
+            for band, filename in self._band_filepaths.items()]
             
+        if len(set(filenames))!=1:
+            raise ValueError('Filename roots are not consistent')
+
+
     @property
     def bands(self):
         return sorted(list(self._band_filepaths.keys()))
