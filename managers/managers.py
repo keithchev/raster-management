@@ -125,6 +125,7 @@ class RasterProject(object):
         self.props['initialization'] = {
             'res': res,
             'bounds': bounds,
+            'commit': utils.current_commit(),
         }
 
         self.save_props()

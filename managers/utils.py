@@ -18,3 +18,8 @@ def shell(command=None, verbose=True):
             print(output.stdout)
             
     return output.stdout
+
+
+def current_commit():
+
+    return shell('git log', verbose=False).split(' ')[1].split('\n')[0][:7]
