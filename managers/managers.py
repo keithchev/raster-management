@@ -15,18 +15,17 @@ from . import utils
 from . import datasets
 
 
-
 def log_operation(method):
 
     def wrapper(self, source, **kwargs):
         
         output = method(self, source, **kwargs)
 
-        self.operations.append({
+        self.props['operations'].append({
             'commit': utils.current_commit(),
             'method': method.__name__, 
-            'source': source.location,
-            'output': output.location,
+            'source': source.path,
+            'output': output.path,
             'kwargs': kwargs,
         })
 
@@ -42,21 +41,20 @@ class RasterProject(object):
     opts = '--overwrite --driver GTiff --co tiled=false'
 
 
-    def __init__(self, location, reset=False):
+    def __init__(self, root, reset=False):
 
-        if not os.path.isdir(location):
-            os.makedirs(location)
+        if not os.path.isdir(root):
+            os.makedirs(root)
             
-        self.location = location 
-        self.name = os.path.split(self.location)[-1]
+        self.root = root 
+        self.name = os.path.split(self.root)[-1]
 
-        self.props_filename = os.path.join(self.location, 'props.json')
+        self.props_filename = os.path.join(self.root, 'props.json')
 
         self.props = {
-            'location': self.location
+            'root': self.root,
+            'operations': []
         }
-
-        self.operations = []
 
         if os.path.exists(self.props_filename):
             if reset:
@@ -70,7 +68,10 @@ class RasterProject(object):
         with open(self.props_filename, 'r') as file:
             props = json.load(file)
 
+        # define the raw datasets
         self.define_sources(**props['sources'])
+
+        # generate the derived dataset
         self.initialize(props['initialization']['res'], props['initialization']['bounds'])
 
 
@@ -79,44 +80,46 @@ class RasterProject(object):
             json.dump(self.props, file)
 
 
-    def output_location(self, method_name):
+    def new_dataset(self, dtype=None, method=None):
         '''
         '''
 
         timestamp = datetime.datetime.strftime(datetime.datetime.now(), '%Y%m%d_%H%M%S')
-        filename = '%s_%s_%s' % (self.name, method_name, timestamp)
-        return os.path.join(self.location, filename)
+        dataset_name = '%s_%s_%s' % (self.name, method, timestamp)
+        dataset_path = os.path.join(self.root, dataset_name)
+
+        return datasets.new_dataset(dtype)(dataset_path, exists=False)
 
 
-    def define_sources(self, locations, source_type=None, root=None):
+    def define_sources(self, paths, source_type=None, source_root=None):
         '''
         Define the raw dataset(s) from which we will generate the derived dataset
         
         source_type: one of 'tif', 'ned', 'landsat'
-        locations: path or list of paths 
-        (to either tifs, NED13 tile directories, or landsat scene directories)
+        filepaths: path or list of paths to the raw datasets
+        (either tifs, NED13 tile directories, or landsat scene directories)
 
         '''
 
-        if type(locations) is str:
-            locations = [locations]
+        if type(paths) is str:
+            paths = [paths]
 
-        if root is not None:
-            locations = [os.path.join(root, location) for location in locations]
+        if source_root is not None:
+            paths = [os.path.join(source_root, path) for path in paths]
 
         # attempt to infer the source_type (TODO: add logic for NED13)
         if source_type is None:
-            if os.path.isdir(locations[0]):
+            if os.path.isdir(paths[0]):
                 source_type = 'landsat'
             else:
                 source_type = 'tif'
     
         self.source_type = source_type
-        self.sources = [datasets.new_dataset(source_type)(location) for location in locations]
+        self.sources = [datasets.new_dataset(source_type)(path) for path in paths]
 
         self.props['sources'] = {
-            'type': self.source_type,
-            'locations': [s.location for s in self.sources],
+            'source_type': self.source_type,
+            'paths': [source.path for source in self.sources],
         }
 
 
@@ -127,15 +130,15 @@ class RasterProject(object):
         '''
 
         # location of the derived dataset
-        location = os.path.join(self.location, self.name)
+        filepath = os.path.join(self.root, self.name)
 
         # placeholder for the derived dataset
-        derived_dataset = datasets.new_dataset(self.source_type)(location, exists=False)    
+        derived_dataset = datasets.new_dataset(self.source_type)(filepath, exists=False)    
     
         for band in derived_dataset.expected_bands:
     
-            srs = ' '.join([source.filepath(band) for source in self.sources])
-            dst = derived_dataset.filepath(band)
+            srs = ' '.join([source.bandpath(band) for source in self.sources])
+            dst = derived_dataset.bandpath(band)
             
             command = '%s merge %s' % (self.rio, self.opts)
 
@@ -157,7 +160,7 @@ class RasterProject(object):
         }
 
         self.save_props()
-        self.dataset = datasets.new_dataset(self.source_type)(location, exists=True)
+        self.derived_dataset = datasets.new_dataset(self.source_type)(filepath, exists=True)
 
 
 
@@ -171,10 +174,10 @@ class LandsatProject(RasterProject):
     def stack(self, source, bands=[4,3,2]):
 
         bands = list(map(str, bands))
-        destination = datasets.new_dataset('tif')(self.output_location('stack'), exists=False)
+        destination = self.new_dataset(dtype='tif', method='stack')
 
         utils.shell('%s stack --overwrite --rgb %s %s' % \
-              (self.rio, ' '.join([source.filepath(b) for b in bands]), destination.filepath()))
+              (self.rio, ' '.join([source.bandpath(b) for b in bands]), destination.path))
 
         return destination
 
@@ -188,8 +191,8 @@ class DEMProject(RasterProject):
     @log_operation
     def hillshade(self, source):
 
-        destination = datasets.new_dataset('tif')(self.output_location('hillshade'), exists=False)
-        utils.shell('gdaldem hillshade %s %s' % (source.filepath(), destination.filepath()))
+        destination = self.new_dataset(dtype='tif', method='hillshade')
+        utils.shell('gdaldem hillshade %s %s' % (source.path, destination.path))
         return destination
 
 

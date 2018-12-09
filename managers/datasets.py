@@ -30,14 +30,13 @@ class Dataset(object):
     Either a single TIF or a set of TIFs (bands) in a single directory
     '''
 
-    def __init__(self, location, is_raw=True, exists=True):
+    def __init__(self, path, is_raw=True, exists=True):
 
         # remove any trailing slashes
-        location = re.sub(r'%s*$' % os.sep, '', location)
+        path = re.sub(r'%s*$' % os.sep, '', path)
 
-        # location is either a filepath (for single TIFs) 
-        # or a directory (for Landsat scenes)
-        self.location = location
+        # path is either the path to a TIFF *file* or to a Landsat/NED13 *directory*
+        self.path = path
 
         # whether the dataset is raw
         self.is_raw = is_raw
@@ -53,33 +52,34 @@ class Dataset(object):
 
 class GeoTIFF(Dataset):
     
-    def __init__(self, location, is_raw=True, exists=True):
-        super().__init__(location, is_raw, exists)
+    def __init__(self, path, is_raw=True, exists=True):
+        super().__init__(path, is_raw, exists)
 
-        path, ext = os.path.splitext(self.location)
+        base, ext = os.path.splitext(self.path)
 
-        # the location doesn't need to include the extension
+        # the dataset name is the filename itself
+        self.name = base.split(os.sep)[-1]
+
+        # the path doesn't need to include the extension
         # (if it doesn't, and exists=True, we assume that it's '.TIF')
         if not ext:
             ext = '.TIF'
-            self.location += ext
+            self.path += ext
 
         if ext.lower() not in ['.tif', '.tiff']:
-            raise ValueError('%s is not a TIFF file' % self.location)
+            raise ValueError('%s is not a TIFF file' % self.path)
 
-        if self.exists and not os.path.isfile(self.location):
-            raise ValueError('%s is not a file' % self.location)
-
-        # the dataset name is the filename itself
-        self.name = path.split(os.sep)[-1]
+        if self.exists and not os.path.isfile(self.path):
+            raise ValueError('%s is not a file' % self.path)
 
 
-    def filepath(self, *args):
+    def bandpath(self, band=None):
         '''
-        filepath to the TIFF file
-        (*args ensures consistency with LandsatScene.filepath)
+        For TIFF files, there is only one 'band' (the TIFF file),
+        and the path to it is the same as self.path
+        (band=None ensures consistency with LandsatScene.bandpath)
         '''
-        return self.location
+        return self.path
 
 
 
@@ -90,8 +90,8 @@ class NED13Tile(Dataset):
 
 class LandsatScene(Dataset):
     
-    def __init__(self, location, is_raw=True, exists=True, satellite=None):
-        super().__init__(location, is_raw, exists)
+    def __init__(self, path, is_raw=True, exists=True, satellite=None):
+        super().__init__(path, is_raw, exists)
 
         # satellite type: 'L8', 'L7', or 'L5'
         if satellite is None:
@@ -99,35 +99,35 @@ class LandsatScene(Dataset):
 
         self.satellite = satellite
 
-        satellite_bands = {
+        bands = {
             'L8': range(1, 12),
             'L7': range(1, 9),
             'L5': range(1, 8),
         }
 
-        self.expected_bands = set(map(str, satellite_bands[self.satellite]))
-        
+        self.expected_bands = set(map(str, bands[self.satellite]))
+
         if self.exists:         
-            if not os.path.isdir(self.location):
-                raise ValueError('%s is not a directory' % self.location)
+            if not os.path.isdir(self.path):
+                raise ValueError('%s is not a directory' % self.path)
         else:
-            os.makedirs(self.location, exist_ok=True)
+            os.makedirs(self.path, exist_ok=True)
 
         # the dataset name is the directory name
-        self.name = os.path.split(self.location)[-1]
+        self.name = os.path.split(self.path)[-1]
         
         # find the filename for each band
-        self._band_filepaths = {}
+        self._bandpaths = {}
         if self.exists:    
-            filepaths = glob.glob(os.path.join(location, '*.TIF'))
-            for filepath in filepaths:
-                result = re.search('_B([0-9]+).TIF$', filepath)
+            bandpaths = glob.glob(os.path.join(self.path, '*.TIF'))
+            for bandpath in bandpaths:
+                result = re.search('_B([0-9]+).TIF$', bandpath)
                 if result:
                     band = result.groups()[0]
-                    self._band_filepaths[band] = filepath
+                    self._bandpaths[band] = bandpath
                 else:
                     print('Warning: unexpected filename %s in scene %s' % \
-                          (filepath.split(os.sep)[-1], self.name))
+                          (bandpath.split(os.sep)[-1], self.name))
             
             self._validate()
 
@@ -135,7 +135,7 @@ class LandsatScene(Dataset):
     def _validate(self):
         
         # check for expected and unexpected bands
-        existing_bands = set(self._band_filepaths.keys())
+        existing_bands = set(self._bandpaths.keys())
         missing_bands = self.expected_bands.difference(existing_bands)
         unexpected_bands = existing_bands.difference(self.expected_bands)
         
@@ -148,31 +148,30 @@ class LandsatScene(Dataset):
                   sorted(list(unexpected_bands)))
 
         # verify that filenames are consistent
-        filenames = [filename.replace('_B%s.TIF' % band, '') 
-            for band, filename in self._band_filepaths.items()]
+        paths = [path.replace('_B%s.TIF' % band, '') for band, path in self._bandpaths.items()]
             
-        if len(set(filenames))!=1:
+        if len(set(paths))!=1:
             raise ValueError('Filename roots are not consistent')
 
 
     @property
     def bands(self):
-        return sorted(list(self._band_filepaths.keys()))
+        return sorted(list(self._bandpaths.keys()))
 
     
-    def filepath(self, band=None):
+    def bandpath(self, band=None):
         
         if band is None:
-            raise ValueError('band must be specified for Landsat datasets')
+            raise ValueError('A band must be provided')
 
         if type(band) is int:
             band = str(band)
-        
+    
         if self.exists:
-            filepath = self._band_filepaths.get(band)
-            if filepath is None:
+            bandpath = self._bandpaths.get(band)
+            if bandpath is None:
                 raise ValueError('B%s does not exist for scene %s' % (band, self.name))
         else:
-            filepath = os.path.join(self.location, '%s_B%s.TIF' % (self.name, band))
+            bandpath = os.path.join(self.path, '%s_B%s.TIF' % (self.name, band))
             
-        return filepath
+        return bandpath
