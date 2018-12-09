@@ -8,7 +8,7 @@ import json
 import numpy as np
 
 
-def new_dataset(dataset_type):
+def new_dataset(dataset_type, path, **kwargs):
 
     dataset_types = {
         'landsat': 'LandsatScene',
@@ -19,8 +19,8 @@ def new_dataset(dataset_type):
     if dataset_type not in dataset_types:
         raise ValueError('%s is not a valid source_type' % dataset_type)
 
-    return getattr(sys.modules[__name__], dataset_types[dataset_type])
-
+    dataset = getattr(sys.modules[__name__], dataset_types[dataset_type])
+    return dataset(path, **kwargs)
 
 
 class Dataset(object):
@@ -30,7 +30,7 @@ class Dataset(object):
     Either a single TIF or a set of TIFs (bands) in a single directory
     '''
 
-    def __init__(self, path, is_raw=True, exists=True):
+    def __init__(self, path, is_raw=False, exists=False):
 
         # remove any trailing slashes
         path = re.sub(r'%s*$' % os.sep, '', path)
@@ -52,13 +52,16 @@ class Dataset(object):
 
 class GeoTIFF(Dataset):
     
-    def __init__(self, path, is_raw=True, exists=True):
-        super().__init__(path, is_raw, exists)
+    def __init__(self, path, **kwargs):
+        super().__init__(path, **kwargs)
 
         base, ext = os.path.splitext(self.path)
 
         # the dataset name is the filename itself
         self.name = base.split(os.sep)[-1]
+
+        # placeholder for the single 'band'
+        self.bands = self.expected_bands
 
         # the path doesn't need to include the extension
         # (if it doesn't, and exists=True, we assume that it's '.TIF')
@@ -71,6 +74,7 @@ class GeoTIFF(Dataset):
 
         if self.exists and not os.path.isfile(self.path):
             raise ValueError('%s is not a file' % self.path)
+
 
 
     def bandpath(self, band=None):
@@ -90,8 +94,8 @@ class NED13Tile(Dataset):
 
 class LandsatScene(Dataset):
     
-    def __init__(self, path, is_raw=True, exists=True, satellite=None):
-        super().__init__(path, is_raw, exists)
+    def __init__(self, path, satellite=None, **kwargs):
+        super().__init__(path, **kwargs)
 
         # satellite type: 'L8', 'L7', or 'L5'
         if satellite is None:

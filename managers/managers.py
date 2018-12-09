@@ -41,42 +41,55 @@ class RasterProject(object):
     opts = '--overwrite --driver GTiff --co tiled=false'
 
 
-    def __init__(self, root, reset=False):
+    def __init__(self, project_root, raw_datasets=None, res=None, bounds=None, reset=False):
 
-        if not os.path.isdir(root):
-            os.makedirs(root)
+        if not os.path.isdir(project_root):
+            os.makedirs(project_root)
             
-        self.root = root 
+        self.root = project_root 
         self.name = os.path.split(self.root)[-1]
 
-        self.props_filename = os.path.join(self.root, 'props.json')
+        # path to the derived dataset
+        self.derived_dataset_filepath = os.path.join(self.root, self.name)
 
-        self.props = {
-            'root': self.root,
-            'operations': []
-        }
+        # placeholder for the derived dataset
+        self.derived_dataset = datasets.new_dataset(self.dtype, self.derived_dataset_filepath)
 
-        if os.path.exists(self.props_filename):
-            if reset:
-                os.remove(self.props_filename)
-            else:
-                self._load_from_props()
+        self.props_filepath = os.path.join(self.root, 'props.json')
 
+        # if there are cached props and we are not resetting
+        if os.path.exists(self.props_filepath) and not reset:
+            print('Loading from existing project')
 
-    def _load_from_props(self):
+            if res is not None or bounds is not None:
+                print('Warning: res and bounds are ignored when loading an existing dataset')
 
-        with open(self.props_filename, 'r') as file:
-            props = json.load(file)
+            with open(self.props_filepath, 'r') as file:
+                self.props = json.load(file)                        
 
-        # define the raw datasets
-        self.define_sources(**props['sources'])
+            self.define_raw_datasets(self.props['raw_datasets'])
 
-        # generate the derived dataset
-        self.initialize(props['initialization']['res'], props['initialization']['bounds'])
+            # validate the derived dataset
+            self.validate_derived_dataset(
+                res=self.props['derived_dataset']['res'], 
+                bounds=self.props['derived_dataset']['bounds'])
+
+        # assume raw_datasets, res, and bounds are defined
+        else:
+            print('Generating new project')
+
+            self.props = {
+                'root': self.root,
+                'operations': []
+            }
+
+            self.define_raw_datasets(raw_datasets)
+            self.generate_derived_dataset(res, bounds)
+            self.save_props()
 
 
     def save_props(self):
-        with open(self.props_filename, 'w') as file:
+        with open(self.props_filepath, 'w') as file:
             json.dump(self.props, file)
 
 
@@ -85,18 +98,18 @@ class RasterProject(object):
         '''
 
         timestamp = datetime.datetime.strftime(datetime.datetime.now(), '%Y%m%d_%H%M%S')
-        dataset_name = '%s_%s_%s' % (self.name, method, timestamp)
-        dataset_path = os.path.join(self.root, dataset_name)
+        name = '%s_%s_%s' % (self.name, method, timestamp)
+        path = os.path.join(self.root, name)
 
-        return datasets.new_dataset(dtype)(dataset_path, exists=False)
+        return datasets.new_dataset(dtype, path, exists=False)
 
 
-    def define_sources(self, paths, source_type=None, source_root=None):
+
+    def define_raw_datasets(self, paths, root=None):
         '''
         Define the raw dataset(s) from which we will generate the derived dataset
         
-        source_type: one of 'tif', 'ned', 'landsat'
-        filepaths: path or list of paths to the raw datasets
+        path: path or list of paths to the raw datasets
         (either tifs, NED13 tile directories, or landsat scene directories)
 
         '''
@@ -104,41 +117,26 @@ class RasterProject(object):
         if type(paths) is str:
             paths = [paths]
 
-        if source_root is not None:
-            paths = [os.path.join(source_root, path) for path in paths]
-
-        # attempt to infer the source_type (TODO: add logic for NED13)
-        if source_type is None:
-            if os.path.isdir(paths[0]):
-                source_type = 'landsat'
-            else:
-                source_type = 'tif'
+        if root is not None:
+            paths = [os.path.join(root, path) for path in paths]
     
-        self.source_type = source_type
-        self.sources = [datasets.new_dataset(source_type)(path) for path in paths]
+        self.raw_datasets = [
+            datasets.new_dataset(self.dtype, path, is_raw=True, exists=True) for path in paths]
 
-        self.props['sources'] = {
-            'source_type': self.source_type,
-            'paths': [source.path for source in self.sources],
-        }
+        self.props['raw_datasets'] = [dataset.path for dataset in self.raw_datasets]
 
 
-    def initialize(self, res=None, bounds=None):
+
+    def generate_derived_dataset(self, res=None, bounds=None):
         '''
         Initialize the derived dataset by merging the raw datasets
 
         '''
 
-        # location of the derived dataset
-        filepath = os.path.join(self.root, self.name)
-
-        # placeholder for the derived dataset
-        derived_dataset = datasets.new_dataset(self.source_type)(filepath, exists=False)    
+        for band in self.derived_dataset.expected_bands:
     
-        for band in derived_dataset.expected_bands:
-    
-            srs = ' '.join([source.bandpath(band) for source in self.sources])
-            dst = derived_dataset.bandpath(band)
+            srs = ' '.join([raw_dataset.bandpath(band) for raw_dataset in self.raw_datasets])
+            dst = self.derived_dataset.bandpath(band)
             
             command = '%s merge %s' % (self.rio, self.opts)
 
@@ -149,24 +147,46 @@ class RasterProject(object):
                 command += ' --bounds "%s"' % bounds
 
             command += ' %s %s' % (srs, dst)
+            utils.shell(command, verbose=False)
 
-            if not os.path.isfile(dst):
-                utils.shell(command, verbose=False)
+        # the derived dataset now exists
+        self.derived_dataset = datasets.new_dataset(self.dtype, self.derived_dataset.path, exists=True)
 
-        self.props['initialization'] = {
+        self.props['derived_dataset'] = {
             'res': res,
             'bounds': bounds,
+            'path': self.derived_dataset.path,
             'commit': utils.current_commit(),
         }
 
-        self.save_props()
-        self.derived_dataset = datasets.new_dataset(self.source_type)(filepath, exists=True)
+
+    def validate_derived_dataset(self, res=None, bounds=None):
+        '''
+        validate an existing derived dataset by verifying that its resolution and bounds
+        are equal to `res` and `bounds`
+        '''
+
+        with rasterio.open(self.derived_dataset.bandpath(1)) as src:
+
+            if res is not None and set(src.res)!=set([res]):
+                raise ValueError(
+                    'The resolution of the existing dataset is %s but a resolution of %s was provided' % \
+                        (src.res, res))
+
+            if bounds is not None and (np.abs(np.array(src.bounds) - bounds).max() > 1000):
+                raise ValueError(
+                    'The bounds of the existing dataset are %s but bounds of %s were provided' % \
+                        (tuple(src.bounds), bounds))
+
+            print('Found existing dataset with res=%s and bounds=%s' % (src.res, tuple(src.bounds)))    
 
 
 
 class LandsatProject(RasterProject):
 
     def __init__(self, *args, **kwargs):
+        
+        self.dtype = 'landsat'
         super().__init__(*args, **kwargs)
 
 
@@ -182,9 +202,23 @@ class LandsatProject(RasterProject):
         return destination
 
 
+    @log_operation
+    def autogain(self, source, dtype='uint8', percentile=1):
+
+        destination = self.new_dataset(dtype='tif', method='autogain')
+
+        for band in source.bands:
+            with rasterio.open(source.bandpath(band), 'r'):
+                pass
+
+
+
+
 class DEMProject(RasterProject):
 
     def __init__(self, *args, **kwargs):
+
+        self.dtype = 'tif'
         super().__init__(*args, **kwargs)
 
 
