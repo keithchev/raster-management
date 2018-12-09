@@ -56,19 +56,22 @@ class GeoTIFF(Dataset):
     def __init__(self, location, is_raw=True, exists=True):
         super().__init__(location, is_raw, exists)
 
+        path, ext = os.path.splitext(self.location)
+
+        # the location doesn't need to include the extension
+        # (if it doesn't, and exists=True, we assume that it's '.TIF')
+        if not ext:
+            ext = '.TIF'
+            self.location += ext
+
+        if ext.lower() not in ['.tif', '.tiff']:
+            raise ValueError('%s is not a TIFF file' % self.location)
+
         if self.exists and not os.path.isfile(self.location):
             raise ValueError('%s is not a file' % self.location)
 
-        # extension and filename
-        path, ext = os.path.splitext(self.location)
-        filename = path.split(os.sep)[-1]
-
         # the dataset name is the filename itself
-        self.name = filename
-
-        # check that we have a TIFF
-        if ext.lower() not in ['.tif', '.tiff']:
-            raise ValueError('%s is not a tif file' % self.location)
+        self.name = path.split(os.sep)[-1]
 
 
     def filepath(self, *args):

@@ -4,6 +4,8 @@ import re
 import sys
 import glob
 import json
+import hashlib
+import datetime
 import rasterio
 import subprocess
 
@@ -12,7 +14,25 @@ import numpy as np
 from . import utils
 from . import datasets
 
-    
+
+
+def log_operation(method):
+
+    def wrapper(self, source, **kwargs):
+        
+        output = method(self, source, **kwargs)
+
+        self.operations.append({
+            'commit': utils.current_commit(),
+            'method': method.__name__, 
+            'source': source.location,
+            'output': output.location,
+            'kwargs': kwargs,
+        })
+
+    return wrapper
+
+
 class RasterProject(object):
     
     # hard-coded path to rasterio CLI
@@ -36,6 +56,8 @@ class RasterProject(object):
             'location': self.location
         }
 
+        self.operations = []
+
         if os.path.exists(self.props_filename):
             if reset:
                 os.remove(self.props_filename)
@@ -53,9 +75,17 @@ class RasterProject(object):
 
 
     def save_props(self):
-
         with open(self.props_filename, 'w') as file:
             json.dump(self.props, file)
+
+
+    def output_location(self, method_name):
+        '''
+        '''
+
+        timestamp = datetime.datetime.strftime(datetime.datetime.now(), '%Y%m%d_%H%M%S')
+        filename = '%s_%s_%s' % (self.name, method_name, timestamp)
+        return os.path.join(self.location, filename)
 
 
     def define_sources(self, locations, source_type=None, root=None):
@@ -89,26 +119,23 @@ class RasterProject(object):
             'locations': [s.location for s in self.sources],
         }
 
-        if source_type=='landsat':
-            location = os.path.join(self.location, self.name)
-        else:
-            location = os.path.join(self.location, '%s.TIF' % self.name)
-
-        # placeholder for the derived dataset
-        self.derived_dataset = datasets.new_dataset(source_type)(location, exists=False)    
-    
-
 
     def initialize(self, res=None, bounds=None):
         '''
-        Initialize the dataset by merging the raw datasets
+        Initialize the derived dataset by merging the raw datasets
 
         '''
 
-        for band in self.derived_dataset.expected_bands:
+        # location of the derived dataset
+        location = os.path.join(self.location, self.name)
+
+        # placeholder for the derived dataset
+        derived_dataset = datasets.new_dataset(self.source_type)(location, exists=False)    
+    
+        for band in derived_dataset.expected_bands:
     
             srs = ' '.join([source.filepath(band) for source in self.sources])
-            dst = self.derived_dataset.filepath(band)
+            dst = derived_dataset.filepath(band)
             
             command = '%s merge %s' % (self.rio, self.opts)
 
@@ -119,6 +146,7 @@ class RasterProject(object):
                 command += ' --bounds "%s"' % bounds
 
             command += ' %s %s' % (srs, dst)
+
             if not os.path.isfile(dst):
                 utils.shell(command, verbose=False)
 
@@ -129,7 +157,26 @@ class RasterProject(object):
         }
 
         self.save_props()
+        self.dataset = datasets.new_dataset(self.source_type)(location, exists=True)
 
+
+
+class LandsatProject(RasterProject):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+
+    @log_operation
+    def stack(self, source, bands=[4,3,2]):
+
+        bands = list(map(str, bands))
+        destination = datasets.new_dataset('tif')(self.output_location('stack'), exists=False)
+
+        utils.shell('%s stack --overwrite --rgb %s %s' % \
+              (self.rio, ' '.join([source.filepath(b) for b in bands]), destination.filepath()))
+
+        return destination
 
 
 class DEMProject(RasterProject):
@@ -138,11 +185,12 @@ class DEMProject(RasterProject):
         super().__init__(*args, **kwargs)
 
 
-    def hillshade(self):
+    @log_operation
+    def hillshade(self, source):
 
-        source = self.derived_dataset.filepath()
-        destination = source.replace('.TIF', '_HS.TIF')
-        utils.shell('gdaldem hillshade %s %s' % (source, destination))
+        destination = datasets.new_dataset('tif')(self.output_location('hillshade'), exists=False)
+        utils.shell('gdaldem hillshade %s %s' % (source.filepath(), destination.filepath()))
+        return destination
 
 
 
