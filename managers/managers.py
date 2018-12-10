@@ -32,6 +32,7 @@ def log_operation(method):
     return wrapper
 
 
+
 class RasterProject(object):
     
     # hard-coded path to rasterio CLI
@@ -45,8 +46,8 @@ class RasterProject(object):
 
         if not os.path.isdir(project_root):
             os.makedirs(project_root)
-            
-        self.root = project_root 
+        
+        self.root = re.sub(r'%s*$' % os.sep, '', project_root)
         self.name = os.path.split(self.root)[-1]
 
         # path to the derived dataset
@@ -166,14 +167,18 @@ class RasterProject(object):
         are equal to `res` and `bounds`
         '''
 
+
         with rasterio.open(self.derived_dataset.bandpath(1)) as src:
+
+            # tolerance for comparing actual to expected bounds
+            tolerance = src.res[0]*2
 
             if res is not None and set(src.res)!=set([res]):
                 raise ValueError(
                     'The resolution of the existing dataset is %s but a resolution of %s was provided' % \
                         (src.res, res))
 
-            if bounds is not None and (np.abs(np.array(src.bounds) - bounds).max() > 1000):
+            if bounds is not None and np.any(np.abs(np.array(src.bounds) - bounds) > tolerance):
                 raise ValueError(
                     'The bounds of the existing dataset are %s but bounds of %s were provided' % \
                         (tuple(src.bounds), bounds))

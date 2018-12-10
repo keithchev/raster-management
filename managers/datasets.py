@@ -130,8 +130,7 @@ class LandsatScene(Dataset):
                     band = result.groups()[0]
                     self._bandpaths[band] = bandpath
                 else:
-                    print('Warning: unexpected filename %s in scene %s' % \
-                          (bandpath.split(os.sep)[-1], self.name))
+                    print('Warning: ignoring unexpected filename %s' % bandpath.split(os.sep)[-1])
             
             self._validate()
 
