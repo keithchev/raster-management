@@ -20,7 +20,8 @@ def new_dataset(dataset_type, path, **kwargs):
         raise ValueError('%s is not a valid source_type' % dataset_type)
 
     dataset = getattr(sys.modules[__name__], dataset_types[dataset_type])
-    return dataset(path, **kwargs)
+    dataset = dataset(path, **kwargs)
+    return dataset
 
 
 class Dataset(object):
@@ -31,6 +32,9 @@ class Dataset(object):
     '''
 
     def __init__(self, path, is_raw=False, exists=False):
+
+        # type must be hard-coded in subclasses
+        self.type = None
 
         # remove any trailing slashes
         path = re.sub(r'%s*$' % os.sep, '', path)
@@ -45,7 +49,7 @@ class Dataset(object):
         self.exists = exists
 
         # the bands we expect the dataset to have
-        # (only not [None] for Landsat datasets)
+        # (only not [None] for Landsat dataset API)
         self.expected_bands = [None]
 
 
@@ -55,12 +59,15 @@ class GeoTIFF(Dataset):
     def __init__(self, path, **kwargs):
         super().__init__(path, **kwargs)
 
+        self.type = 'tif'
+
         base, ext = os.path.splitext(self.path)
 
         # the dataset name is the filename itself
         self.name = base.split(os.sep)[-1]
 
         # placeholder for the single 'band'
+        # (for consistency with Landsat dataset API)
         self.bands = self.expected_bands
 
         # the path doesn't need to include the extension
@@ -72,7 +79,13 @@ class GeoTIFF(Dataset):
         if ext.lower() not in ['.tif', '.tiff']:
             raise ValueError('%s is not a TIFF file' % self.path)
 
-        if self.exists and not os.path.isfile(self.path):
+        if self.exists:
+            self._validate()
+
+
+    def _validate(self):
+
+        if not os.path.isfile(self.path):
             raise ValueError('%s is not a file' % self.path)
 
 
@@ -96,6 +109,8 @@ class LandsatScene(Dataset):
     
     def __init__(self, path, satellite=None, **kwargs):
         super().__init__(path, **kwargs)
+
+        self.type = 'landsat'
 
         # satellite type: 'L8', 'L7', or 'L5'
         if satellite is None:

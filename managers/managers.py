@@ -18,9 +18,7 @@ from . import datasets
 def log_operation(method):
 
     def wrapper(self, source, **kwargs):
-        
         output = method(self, source, **kwargs)
-
         self.props['operations'].append({
             'commit': utils.current_commit(),
             'method': method.__name__, 
@@ -44,6 +42,10 @@ class RasterProject(object):
 
     def __init__(self, project_root, raw_datasets=None, res=None, bounds=None, reset=False):
 
+        # project dataset type must be hard-coded in subclasses
+        if not hasattr(self, 'dataset_type'):
+            raise ValueError('Project\'s raw dataset type must be specified')
+
         if not os.path.isdir(project_root):
             os.makedirs(project_root)
         
@@ -51,21 +53,21 @@ class RasterProject(object):
         self.name = os.path.split(self.root)[-1]
 
         # path to the derived dataset
-        self.derived_dataset_filepath = os.path.join(self.root, self.name)
+        self.derived_dataset_path = os.path.join(self.root, self.name)
 
         # placeholder for the derived dataset
-        self.derived_dataset = datasets.new_dataset(self.dtype, self.derived_dataset_filepath)
+        self.derived_dataset = datasets.new_dataset(self.dataset_type, self.derived_dataset_path)
 
-        self.props_filepath = os.path.join(self.root, 'props.json')
+        self.props_path = os.path.join(self.root, 'props.json')
 
         # if there are cached props and we are not resetting
-        if os.path.exists(self.props_filepath) and not reset:
+        if os.path.exists(self.props_path) and not reset:
             print('Loading from existing project')
 
             if res is not None or bounds is not None:
                 print('Warning: res and bounds are ignored when loading an existing dataset')
 
-            with open(self.props_filepath, 'r') as file:
+            with open(self.props_path, 'r') as file:
                 self.props = json.load(file)                        
 
             self.define_raw_datasets(self.props['raw_datasets'])
@@ -90,11 +92,11 @@ class RasterProject(object):
 
 
     def save_props(self):
-        with open(self.props_filepath, 'w') as file:
+        with open(self.props_path, 'w') as file:
             json.dump(self.props, file)
 
 
-    def new_dataset(self, dtype=None, method=None):
+    def new_dataset(self, dataset_type=None, method=None):
         '''
         '''
 
@@ -102,7 +104,7 @@ class RasterProject(object):
         name = '%s_%s_%s' % (self.name, method, timestamp)
         path = os.path.join(self.root, name)
 
-        return datasets.new_dataset(dtype, path, exists=False)
+        return datasets.new_dataset(dataset_type, path, exists=False)
 
 
 
@@ -122,7 +124,7 @@ class RasterProject(object):
             paths = [os.path.join(root, path) for path in paths]
     
         self.raw_datasets = [
-            datasets.new_dataset(self.dtype, path, is_raw=True, exists=True) for path in paths]
+            datasets.new_dataset(self.dataset_type, path, is_raw=True, exists=True) for path in paths]
 
         self.props['raw_datasets'] = [dataset.path for dataset in self.raw_datasets]
 
@@ -150,8 +152,9 @@ class RasterProject(object):
             command += ' %s %s' % (srs, dst)
             utils.shell(command, verbose=False)
 
-        # the derived dataset now exists
-        self.derived_dataset = datasets.new_dataset(self.dtype, self.derived_dataset.path, exists=True)
+        # update the derived dataset, now that it exists
+        self.derived_dataset = datasets.new_dataset(
+            self.derived_dataset.type, self.derived_dataset.path, exists=True)
 
         self.props['derived_dataset'] = {
             'res': res,
@@ -191,7 +194,7 @@ class LandsatProject(RasterProject):
 
     def __init__(self, *args, **kwargs):
         
-        self.dtype = 'landsat'
+        self.dataset_type = 'landsat'
         super().__init__(*args, **kwargs)
 
 
@@ -199,7 +202,7 @@ class LandsatProject(RasterProject):
     def stack(self, source, bands=[4,3,2]):
 
         bands = list(map(str, bands))
-        destination = self.new_dataset(dtype='tif', method='stack')
+        destination = self.new_dataset('tif', method='stack')
 
         utils.shell('%s stack --overwrite --rgb %s %s' % \
               (self.rio, ' '.join([source.bandpath(b) for b in bands]), destination.path))
@@ -210,7 +213,7 @@ class LandsatProject(RasterProject):
     @log_operation
     def autogain(self, source, dtype='uint8', percentile=1):
 
-        destination = self.new_dataset(dtype='tif', method='autogain')
+        destination = self.new_dataset('tif', method='autogain')
 
         for band in source.bands:
             with rasterio.open(source.bandpath(band), 'r'):
@@ -223,14 +226,14 @@ class DEMProject(RasterProject):
 
     def __init__(self, *args, **kwargs):
 
-        self.dtype = 'tif'
+        self.dataset_type = 'tif'
         super().__init__(*args, **kwargs)
 
 
     @log_operation
     def hillshade(self, source):
 
-        destination = self.new_dataset(dtype='tif', method='hillshade')
+        destination = self.new_dataset('tif', method='hillshade')
         utils.shell('gdaldem hillshade %s %s' % (source.path, destination.path))
         return destination
 
