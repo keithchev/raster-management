@@ -17,7 +17,7 @@ def new_dataset(dataset_type, path, **kwargs):
     }
 
     if dataset_type not in dataset_types:
-        raise ValueError('%s is not a valid source_type' % dataset_type)
+        raise ValueError('%s is not a valid dataset type' % dataset_type)
 
     dataset = getattr(sys.modules[__name__], dataset_types[dataset_type])
     dataset = dataset(path, **kwargs)

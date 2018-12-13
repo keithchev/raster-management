@@ -174,7 +174,7 @@ class RasterProject(object):
         with rasterio.open(self.derived_dataset.bandpath(1)) as src:
 
             # tolerance for comparing actual to expected bounds
-            tolerance = src.res[0]*2
+            tolerance = max(src.res)*2
 
             if res is not None and set(src.res)!=set([res]):
                 raise ValueError(
