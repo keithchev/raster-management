@@ -13,6 +13,7 @@ import numpy as np
 
 from . import utils
 from . import datasets
+from . import settings
 
 
 def log_operation(method):
@@ -33,9 +34,9 @@ def log_operation(method):
 
 class RasterProject(object):
     
-    # hard-coded path to rasterio CLI
-    rio = '/home/keith/anaconda3/envs/gdalenv/bin/rio'
-    
+    # path to rasterio CLI
+    rio = settings.RIO_CLI
+
     # hard-coded output options
     opts = '--overwrite --driver GTiff --co tiled=false'
 
