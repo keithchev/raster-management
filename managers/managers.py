@@ -201,9 +201,12 @@ class LandsatProject(RasterProject):
 
     @log_operation
     def stack(self, source, bands=[4,3,2]):
+        '''
+        source: a Landsat dataset (usually self.derived_dataset)
+        '''
 
         bands = list(map(str, bands))
-        destination = self.new_dataset('tif', method='stack')
+        destination = self._new_dataset('tif', method='stack')
 
         utils.shell('%s stack --overwrite --rgb %s %s' % \
               (self.rio, ' '.join([source.bandpath(b) for b in bands]), destination.path))
@@ -212,13 +215,50 @@ class LandsatProject(RasterProject):
 
 
     @log_operation
-    def autogain(self, source, dtype='uint8', percentile=1):
+    def autogain(self, source, percentile=None, each_band=True):
+        '''
+        Autogain an RGB image
 
-        destination = self.new_dataset('tif', method='autogain')
+        source: dataset object representing an RGB geoTIFF
+        
+        '''
 
-        for band in source.bands:
-            with rasterio.open(source.bandpath(band), 'r'):
-                pass
+        # hard-coded 'uint8' dtype for now
+        dtype = 'uint8'
+        dtype_max = 255
+
+        # default to min/max
+        if percentile is None:
+            percentile = 100
+
+        # destination dataset
+        destination = self._new_dataset('tif', method='autogain')
+                
+        def _autogain(im, percentile):
+            minn, maxx = np.percentile(im[:], [100 - percentile, percentile])
+            im -= minn
+            im /= (maxx - minn)
+            im[im < 0] = 0
+            im[im > 1] = 1
+            return im
+
+        with rasterio.open(source) as src:
+            dst_profile = src.profile
+            dst_profile['dtype'] = dtype
+
+            with rasterio.open(destination.path, 'w', **dst_profile) as dst:
+                if each_band:
+                    im_dst = np.zeros((len(src.indexes),) + src.shape)
+                    for ind, band in enumerate(src.indexes):
+                        im = src.read(band).astype('float64')
+                        im_dst[ind, :, :] = _autogain(im, percentile)
+                else:
+                    im = src.read().astype('float64')
+                    im_dst = _autogain(im, percentile)
+
+                im_dst *= dtype_max
+                im_dst = im_dst.astype(dtype)
+                dst.write(im_dst)
 
 
 
@@ -234,7 +274,7 @@ class DEMProject(RasterProject):
     @log_operation
     def hillshade(self, source):
 
-        destination = self.new_dataset('tif', method='hillshade')
+        destination = self._new_dataset('tif', method='hillshade')
         utils.shell('gdaldem hillshade %s %s' % (source.path, destination.path))
         return destination
 

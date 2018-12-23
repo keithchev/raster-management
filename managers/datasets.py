@@ -43,6 +43,7 @@ class Dataset(object):
         self.path = path
 
         # whether the dataset is raw
+        # (for reference only)
         self.is_raw = is_raw
 
         # whether the dataset already exists
