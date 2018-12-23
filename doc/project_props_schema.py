@@ -1,30 +1,30 @@
     props = {
 
     	# top-level project directory
-        'location': ''
+        'root': ''
 
         # raw datasets (Landsat scenes, NED13 tiles, or generic GeoTIFFs)
         # for Landsat, the locations are paths to scene directories;
         # for TIFFs, the locations are paths to tif files
-        'sources': {
-            'type': 'landsat' | 'ned' | 'tif',
-            'locations': list
+        'raw_datasets': {
+            'dataset_type': 'landsat' | 'ned' | 'tif',
+            'paths': list
         },
 
-        # arguments for the merge command that generates the derived dataset
-        'initialization': {
-            'res': float,
-            'bounds': list,
-        },
-
-        # log of files created from the derived dataset
-        'history': [
+        # log of operations, beginning with the merge command that generates the derived dataset
+        'operations': [
             {
-                'command': '',
+                'commit': str
+                'method': str,
+                'kwargs': {}
+                'sources': [{
+                    'type': 'landsat' | 'tif',
+                    'path': str
+                }],
                 'destination': {
                     'type': 'landsat' | 'tif',
-                    'location': ''
-                },
+                    'path': str
+                }
             },
         ],
     }
