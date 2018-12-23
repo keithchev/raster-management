@@ -25,21 +25,7 @@ class Operation(object):
         return json.dumps(self.serialize())
 
 
-    def from_json(self, serialized_operation):
-
-        for attr in ['method', 'kwargs', 'commit']:
-            setattr(self, attr, serialized_operation[attr])
-
-        sources = serialized_operation['sources']
-        destination = serialized_operation['destination']
-
-        self.sources = [datasets.new_dataset(d['type'], d['path'], exists=True) for d in sources]
-        self.destination = datasets.new_dataset(destination['type'], destination['path'], exists=True)
-
-        return self
-
-
-    def from_args(self, sources, destination, method, kwargs, commit):
+    def create(self, sources, destination, method, kwargs, commit):
 
         for dataset in sources + [destination]:
             assert isinstance(dataset, datasets.Dataset)
@@ -50,6 +36,20 @@ class Operation(object):
         self.method = method
         self.kwargs = kwargs
         self.commit = commit
+
+        return self
+
+
+    def deserialize(self, serialized_operation):
+
+        for attr in ['method', 'kwargs', 'commit']:
+            setattr(self, attr, serialized_operation[attr])
+
+        sources = serialized_operation['sources']
+        destination = serialized_operation['destination']
+
+        self.sources = [datasets.new_dataset(d['type'], d['path'], exists=True) for d in sources]
+        self.destination = datasets.new_dataset(destination['type'], destination['path'], exists=True)
 
         return self
 
@@ -76,7 +76,7 @@ def log_operation(method):
         if not isinstance(sources, list):
             sources = [sources]
         
-        operation = Operation().from_args(
+        operation = Operation().create(
             destination=destination,
             sources=sources,
             kwargs=kwargs,
@@ -118,11 +118,6 @@ class RasterProject(object):
 
         self.props_path = os.path.join(self.root, 'props.json')
 
-        # initialize props object
-        self.props = {
-            'root': self.root,
-            'operations': []
-        }
 
         # if there are cached props and we are not resetting
         if os.path.exists(self.props_path) and not reset:
@@ -134,17 +129,11 @@ class RasterProject(object):
             with open(self.props_path, 'r') as file:
                 cached_props = json.load(file)                        
 
-            self.define_raw_datasets(cached_props['raw_datasets']['paths'])
-
-            self.operations = self.deserialize_operations(cached_props['operations'])
-            self.validate_operations()
+            self.deserialize(cached_props)
 
             # check that the cached operations match the newly serialized operations
-            serialized_operations = self.serialize_operations()
-            diff = deepdiff.DeepDiff(
-                cached_props['operations'], 
-                serialized_operations, 
-                report_repetition=True)
+            new_props = self.serialize()
+            diff = deepdiff.DeepDiff(cached_props, new_props, report_repetition=True)
 
             if diff:
                 print('WARNING: cached serialized operations are not reproducible')
@@ -152,8 +141,10 @@ class RasterProject(object):
 
         else:
             print('Generating new project')
+
             if raw_datasets is None:
                 raise ValueError('The argument `raw_datasets` must be provided')
+
             self.define_raw_datasets(raw_datasets)
 
             self.operations = []
@@ -161,20 +152,31 @@ class RasterProject(object):
 
 
 
-    def serialize_operations(self):
-        return [operation.serialize() for operation in self.operations]
+    def serialize(self):
+
+        return {
+            'root': self.root,
+            'raw_datasets': [{'type': d.type, 'path': d.path} for d in self.raw_datasets],
+            'operations': [operation.serialize() for operation in self.operations],
+        }
 
 
-    @staticmethod
-    def deserialize_operations(serialized_operations):
-        return [Operation().from_json(op) for op in serialized_operations]
-        
+    def deserialize(self, cached_props):
+
+        # de-serialize the raw datasets
+        self.define_raw_datasets([d['path'] for d in cached_props['raw_datasets']])
+
+        # de-serialize and validate the cached operations
+        self.operations =[Operation().deserialize(op) for op in cached_props['operations']]
+
+        self.validate_operations()
+
 
     def save_props(self):
 
-        self.props['operations'] = self.serialize_operations()
+        props = self.serialize()
         with open(self.props_path, 'w') as file:
-            json.dump(self.props, file)
+            json.dump(props, file)
 
 
     def get_operation(self, index):
@@ -221,11 +223,6 @@ class RasterProject(object):
     
         self.raw_datasets = [
             datasets.new_dataset(self.raw_dataset_type, path, is_raw=True, exists=True) for path in paths]
-
-        self.props['raw_datasets'] = {
-            'dataset_type': self.raw_dataset_type,
-            'paths': [dataset.path for dataset in self.raw_datasets],
-        }
 
 
     @log_operation
