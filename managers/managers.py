@@ -4,7 +4,7 @@ import re
 import sys
 import glob
 import json
-import hashlib
+import deepdiff
 import datetime
 import rasterio
 import subprocess
@@ -16,17 +16,79 @@ from . import datasets
 from . import settings
 
 
+class Operation(object):
+
+    def __init__(self):
+        pass
+
+    def __repr__(self):
+        return json.dumps(self.serialize())
+
+
+    def from_json(self, op):
+
+        for attr in ['method', 'kwargs', 'commit']:
+            setattr(self, attr, op[attr])
+
+        self.sources = [datasets.new_dataset(source['type'], source['path'], exists=True)
+            for source in op['sources']]
+
+        destination = op['destination']
+        self.destination = datasets.new_dataset(destination['type'], destination['path'], exists=True)
+
+
+    def from_args(self, sources, destination, method, kwargs, commit):
+
+        self.sources = sources
+        self.destination = destination
+
+        self.method = method
+        self.kwargs = kwargs
+        self.commit = commit
+
+
+    def serialize(self):
+
+        sources = []
+        for source in self.sources:
+            sources.append({
+                'type': source.type,
+                'path': source.path
+            })
+
+        op = {
+            'method': self.method,
+            'kwargs': self.kwargs,
+            'commit': self.commit,
+            'sources': sources,
+            'destination': {'type': self.destination.type, 'path': self.destination.path}
+        }
+
+        return op
+
+
+
 def log_operation(method):
 
     def wrapper(self, source, **kwargs):
-        output = method(self, source, **kwargs)
-        self.props['operations'].append({
-            'commit': utils.current_commit(),
-            'method': method.__name__, 
-            'source': source.path,
-            'output': output.path,
-            'kwargs': kwargs,
-        })
+
+        destination = method(self, source, **kwargs)
+
+        sources = source
+        if not isinstance(sources, list):
+            sources = [sources]
+        
+        operation = Operation()
+        operation.from_args(
+            destination=destination,
+            sources=sources,
+            kwargs=kwargs,
+            method=method.__name__, 
+            commit=utils.current_commit()
+        )
+
+        self.operations.append(operation)
+        self.save_props()
 
     return wrapper
 
@@ -42,10 +104,14 @@ class RasterProject(object):
 
 
     def __init__(self, project_root, raw_datasets=None, res=None, bounds=None, reset=False):
+        '''
+        project_root: path to the project directory
+        raw_datasets: a list of paths to either TIF files or Landsat scene directories
+        
+        '''
 
-        # project dataset type must be hard-coded in subclasses
-        if not hasattr(self, 'dataset_type'):
-            raise ValueError('Project\'s raw dataset type must be specified')
+        # raw dataset type must be hard-coded in subclasses
+        assert hasattr(self, 'raw_dataset_type')
 
         if not os.path.isdir(project_root):
             os.makedirs(project_root)
@@ -53,13 +119,13 @@ class RasterProject(object):
         self.root = re.sub(r'%s*$' % os.sep, '', project_root)
         self.name = os.path.split(self.root)[-1]
 
-        # path to the derived dataset
-        self.derived_dataset_path = os.path.join(self.root, self.name)
-
-        # placeholder for the derived dataset
-        self.derived_dataset = datasets.new_dataset(self.dataset_type, self.derived_dataset_path)
-
         self.props_path = os.path.join(self.root, 'props.json')
+
+        # initialize props object
+        self.props = {
+            'root': self.root,
+            'operations': []
+        }
 
         # if there are cached props and we are not resetting
         if os.path.exists(self.props_path) and not reset:
@@ -69,42 +135,81 @@ class RasterProject(object):
                 print('Warning: res and bounds are ignored when loading an existing dataset')
 
             with open(self.props_path, 'r') as file:
-                self.props = json.load(file)                        
+                cached_props = json.load(file)                        
 
-            self.define_raw_datasets(self.props['raw_datasets'])
+            self.define_raw_datasets(cached_props['raw_datasets']['paths'])
 
-            # validate the derived dataset
-            self.validate_derived_dataset(
-                res=self.props['derived_dataset']['res'], 
-                bounds=self.props['derived_dataset']['bounds'])
+            self.operations = self.deserialize_operations(cached_props['operations'])
+            self.validate_operations()
 
-        # assume raw_datasets, res, and bounds are defined
+            # check that the cached operations match the newly serialized operations
+            serialized_operations = self.serialize_operations()
+            diff = deepdiff.DeepDiff(cached_props['operations'], serialized_operations, report_repetition=True)
+            if diff:
+                print('WARNING: cached serialized operations are not reproducible')
+                print(diff)
+
         else:
+            if raw_datasets is None:
+                raise ValueError('The argument `raw_datasets` must be provided')
+
             print('Generating new project')
-
-            self.props = {
-                'root': self.root,
-                'operations': []
-            }
-
             self.define_raw_datasets(raw_datasets)
-            self.generate_derived_dataset(res, bounds)
-            self.save_props()
+
+            self.operations = []
+            self.merge(self.raw_datasets, res=res, bounds=bounds)
+
+
+
+    def serialize_operations(self):
+        return [operation.serialize() for operation in self.operations]
+
+
+
+    @staticmethod
+    def deserialize_operations(serialized_operations):
+        operations = []
+        for op in serialized_operations:
+            operation = Operation()
+            operation.from_json(op)
+            operations.append(operation)
+
+        return operations
+
 
 
     def save_props(self):
+
+        self.props['operations'] = self.serialize_operations()
+
         with open(self.props_path, 'w') as file:
             json.dump(self.props, file)
 
 
-    def new_dataset(self, dataset_type=None, method=None):
+
+    def get_operation(self, index):
+
+        if index=='last':
+            pass
+
+        if index=='first':
+            pass
+
+        if type(ind) is int:
+            pass
+
+
+
+    def _new_dataset(self, dataset_type=None, method=None):
         '''
+        Generate a new output dataset given a method name
+        
+        Note that we use the timestamp as a primitive kind of hash to guarantee a unique filename
         '''
 
         timestamp = datetime.datetime.strftime(datetime.datetime.now(), '%Y%m%d_%H%M%S')
         name = '%s_%s_%s' % (self.name, method, timestamp)
         path = os.path.join(self.root, name)
-
         return datasets.new_dataset(dataset_type, path, exists=False)
 
 
@@ -125,22 +230,35 @@ class RasterProject(object):
             paths = [os.path.join(root, path) for path in paths]
     
         self.raw_datasets = [
-            datasets.new_dataset(self.dataset_type, path, is_raw=True, exists=True) for path in paths]
+            datasets.new_dataset(self.raw_dataset_type, path, is_raw=True, exists=True) for path in paths]
 
-        self.props['raw_datasets'] = [dataset.path for dataset in self.raw_datasets]
+        self.props['raw_datasets'] = {
+            'dataset_type': self.raw_dataset_type,
+            'paths': [dataset.path for dataset in self.raw_datasets],
+        }
 
 
-
-    def generate_derived_dataset(self, res=None, bounds=None):
+    @log_operation
+    def merge(self, source, res=None, bounds=None):
         '''
-        Initialize the derived dataset by merging the raw datasets
+        Create the root dataset by merging and/or cropping the raw dataset(s).
 
+        Note that this method is the only way to create a root derived dataset;
+        that is, the source must be equal to self.raw_datasets,
+        and the root/first operation in self.operations must be a call to this method.
+        
+        For now, we don't enforce these conventions. 
         '''
 
-        for band in self.derived_dataset.expected_bands:
+        assert isinstance(source, list)        
+        sources = source
+
+        destination = self._new_dataset(self.raw_dataset_type, method='merge')
+
+        for band in destination.expected_bands:
     
-            srs = ' '.join([raw_dataset.bandpath(band) for raw_dataset in self.raw_datasets])
-            dst = self.derived_dataset.bandpath(band)
+            srs = ' '.join([source.bandpath(band) for source in sources])
+            dst = destination.bandpath(band)
             
             command = '%s merge %s' % (self.rio, self.opts)
 
@@ -153,41 +271,42 @@ class RasterProject(object):
             command += ' %s %s' % (srs, dst)
             utils.shell(command, verbose=False)
 
-        # update the derived dataset, now that it exists
-        self.derived_dataset = datasets.new_dataset(
-            self.derived_dataset.type, self.derived_dataset.path, exists=True)
-
-        self.props['derived_dataset'] = {
-            'res': res,
-            'bounds': bounds,
-            'path': self.derived_dataset.path,
-            'commit': utils.current_commit(),
-        }
+        return destination
 
 
-    def validate_derived_dataset(self, res=None, bounds=None):
+
+    def validate_operations(self):
         '''
-        validate an existing derived dataset by verifying that its resolution and bounds
-        are equal to `res` and `bounds`
+        Validate operations in self.operations by checking that operation.kwargs are consistent
+        with the geoTIFF metadata, to the extent that we can. 
+        
+        For now, we only check that the `res` and `bounds` of the initial merge operation
+        are consistent with the root derived dataset.
+
         '''
 
+        # the first operation must be a merge
+        operation = self.operations[0]
+        assert(operation.method=='merge')
 
-        with rasterio.open(self.derived_dataset.bandpath(1)) as src:
+        res, bounds = operation.kwargs['res'], operation.kwargs['bounds']
+
+        with rasterio.open(operation.destination.bandpath(1)) as src:
 
             # tolerance for comparing actual to expected bounds
             tolerance = max(src.res)*2
 
             if res is not None and set(src.res)!=set([res]):
                 raise ValueError(
-                    'The resolution of the existing dataset is %s but a resolution of %s was provided' % \
+                    'The resolution of the existing root dataset is %s but a resolution of %s was provided' % \
                         (src.res, res))
 
             if bounds is not None and np.any(np.abs(np.array(src.bounds) - bounds) > tolerance):
                 raise ValueError(
-                    'The bounds of the existing dataset are %s but bounds of %s were provided' % \
+                    'The bounds of the existing root dataset are %s but bounds of %s were provided' % \
                         (tuple(src.bounds), bounds))
 
-            print('Found existing dataset with res=%s and bounds=%s' % (src.res, tuple(src.bounds)))    
+            print('Found root dataset with res=%s and bounds=%s' % (src.res, tuple(src.bounds)))    
 
 
 
@@ -195,14 +314,14 @@ class LandsatProject(RasterProject):
 
     def __init__(self, *args, **kwargs):
         
-        self.dataset_type = 'landsat'
+        self.raw_dataset_type = 'landsat'
         super().__init__(*args, **kwargs)
 
 
     @log_operation
     def stack(self, source, bands=[4,3,2]):
         '''
-        source: a Landsat dataset (usually self.derived_dataset)
+        source: a Landsat dataset
         '''
 
         bands = list(map(str, bands))
@@ -242,7 +361,7 @@ class LandsatProject(RasterProject):
             im[im > 1] = 1
             return im
 
-        with rasterio.open(source) as src:
+        with rasterio.open(source.path) as src:
             dst_profile = src.profile
             dst_profile['dtype'] = dtype
 
@@ -260,6 +379,7 @@ class LandsatProject(RasterProject):
                 im_dst = im_dst.astype(dtype)
                 dst.write(im_dst)
 
+        return destination
 
 
 
@@ -267,7 +387,7 @@ class DEMProject(RasterProject):
 
     def __init__(self, *args, **kwargs):
 
-        self.dataset_type = 'tif'
+        self.raw_dataset_type = 'tif'
         super().__init__(*args, **kwargs)
 
 
