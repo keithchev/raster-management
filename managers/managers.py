@@ -25,19 +25,24 @@ class Operation(object):
         return json.dumps(self.serialize())
 
 
-    def from_json(self, op):
+    def from_json(self, serialized_operation):
 
         for attr in ['method', 'kwargs', 'commit']:
-            setattr(self, attr, op[attr])
+            setattr(self, attr, serialized_operation[attr])
 
-        self.sources = [datasets.new_dataset(source['type'], source['path'], exists=True)
-            for source in op['sources']]
+        sources = serialized_operation['sources']
+        destination = serialized_operation['destination']
 
-        destination = op['destination']
+        self.sources = [datasets.new_dataset(d['type'], d['path'], exists=True) for d in sources]
         self.destination = datasets.new_dataset(destination['type'], destination['path'], exists=True)
+
+        return self
 
 
     def from_args(self, sources, destination, method, kwargs, commit):
+
+        for dataset in sources + [destination]:
+            assert isinstance(dataset, datasets.Dataset)
 
         self.sources = sources
         self.destination = destination
@@ -46,25 +51,18 @@ class Operation(object):
         self.kwargs = kwargs
         self.commit = commit
 
+        return self
+
 
     def serialize(self):
 
-        sources = []
-        for source in self.sources:
-            sources.append({
-                'type': source.type,
-                'path': source.path
-            })
-
-        op = {
+        return {
             'method': self.method,
             'kwargs': self.kwargs,
             'commit': self.commit,
-            'sources': sources,
+            'sources': [{'type': s.type, 'path': s.path} for s in self.sources],
             'destination': {'type': self.destination.type, 'path': self.destination.path}
         }
-
-        return op
 
 
 
@@ -78,8 +76,7 @@ def log_operation(method):
         if not isinstance(sources, list):
             sources = [sources]
         
-        operation = Operation()
-        operation.from_args(
+        operation = Operation().from_args(
             destination=destination,
             sources=sources,
             kwargs=kwargs,
@@ -144,16 +141,19 @@ class RasterProject(object):
 
             # check that the cached operations match the newly serialized operations
             serialized_operations = self.serialize_operations()
-            diff = deepdiff.DeepDiff(cached_props['operations'], serialized_operations, report_repetition=True)
+            diff = deepdiff.DeepDiff(
+                cached_props['operations'], 
+                serialized_operations, 
+                report_repetition=True)
+
             if diff:
                 print('WARNING: cached serialized operations are not reproducible')
                 print(diff)
 
         else:
+            print('Generating new project')
             if raw_datasets is None:
                 raise ValueError('The argument `raw_datasets` must be provided')
-
-            print('Generating new project')
             self.define_raw_datasets(raw_datasets)
 
             self.operations = []
@@ -165,26 +165,16 @@ class RasterProject(object):
         return [operation.serialize() for operation in self.operations]
 
 
-
     @staticmethod
     def deserialize_operations(serialized_operations):
-        operations = []
-        for op in serialized_operations:
-            operation = Operation()
-            operation.from_json(op)
-            operations.append(operation)
-
-        return operations
-
-
+        return [Operation().from_json(op) for op in serialized_operations]
+        
 
     def save_props(self):
 
         self.props['operations'] = self.serialize_operations()
-
         with open(self.props_path, 'w') as file:
             json.dump(self.props, file)
-
 
 
     def get_operation(self, index):
