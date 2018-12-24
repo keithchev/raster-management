@@ -50,8 +50,11 @@ class Dataset(object):
         self.exists = exists
 
         # the bands we expect the dataset to have
-        # (only not [None] for Landsat dataset API)
+        # (only not [None] for Landsat datasets)
         self.expected_bands = [None]
+
+        # the panchromatic band (for Landsat datasets only)
+        self.pan_band = None
 
 
 
@@ -125,6 +128,13 @@ class LandsatScene(Dataset):
             'L5': range(1, 8),
         }
 
+        pan_bands = {
+            'L8': '8',
+            'L7': '7',
+            'L5': None,
+        }
+
+        self.pan_band = pan_bands[self.satellite]
         self.expected_bands = set(map(str, bands[self.satellite]))
 
         if self.exists:         

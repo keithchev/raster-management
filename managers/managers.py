@@ -27,12 +27,16 @@ class Operation(object):
         return json.dumps(self.serialize())
 
 
-    def create(self, sources, destination, method, kwargs, commit):
+    def create(self, source, destination, method, kwargs, commit):
 
-        for dataset in sources + [destination]:
+        # force source to list
+        if not isinstance(source, list):
+            source = [source]
+
+        for dataset in source + [destination]:
             assert isinstance(dataset, datasets.Dataset)
 
-        self.sources = sources
+        self.source = source
         self.destination = destination
 
         self.method = method
@@ -47,10 +51,10 @@ class Operation(object):
         for attr in self._serializable_attrs:
             setattr(self, attr, props.get(attr))
 
-        sources = props['sources']
+        source = props['source']
         destination = props['destination']
 
-        self.sources = [datasets.new_dataset(d['type'], d['path'], exists=True) for d in sources]
+        self.source = [datasets.new_dataset(d['type'], d['path'], exists=True) for d in source]
         self.destination = datasets.new_dataset(destination['type'], destination['path'], exists=True)
 
         return self
@@ -62,7 +66,7 @@ class Operation(object):
         for attr in self._serializable_attrs:
             props[attr] = getattr(self, attr)
 
-        props['sources'] = [{'type': s.type, 'path': s.path} for s in self.sources]
+        props['source'] = [{'type': s.type, 'path': s.path} for s in self.source]
         props['destination'] = {'type': self.destination.type, 'path': self.destination.path}
         
         return props
@@ -75,13 +79,9 @@ def log_operation(method):
 
         destination = method(self, source, **kwargs)
 
-        # force source to list
-        if not isinstance(source, list):
-            source = [source]
-        
         operation = Operation().create(
             destination=destination,
-            sources=sources,
+            source=source,
             kwargs=kwargs,
             method=method.__name__, 
             commit=utils.current_commit()
@@ -229,30 +229,36 @@ class RasterProject(object):
 
 
     @log_operation
-    def merge(self, sources, res=None, bounds=None):
+    def merge(self, source, res=None, bounds=None):
         '''
         Create the root dataset by merging and/or cropping the raw dataset(s).
 
         Note that this method is the only way to create the root derived dataset;
-        that is, `sources` should correspond to `dataset_paths` in __init__,
+        that is, `source` should correspond to `dataset_paths` in __init__,
         and the root/first operation in self.operations should be a call to this method.
         
         For now, we don't enforce these conventions. 
         '''
 
-        assert isinstance(sources, list)        
+        assert isinstance(source, list)     
+        for _source in source:
+            assert(_source.type==self.raw_dataset_type)   
         
         destination = self._new_dataset(self.raw_dataset_type, method='merge')
 
         for band in destination.expected_bands:
     
-            srs = ' '.join([source.bandpath(band) for source in sources])
+            srs = ' '.join([d.bandpath(band) for d in source])
             dst = destination.bandpath(band)
-            
+
             command = '%s merge %s' % (self.rio, self.opts)
 
             if res:
-                command += ' -r %s' % res
+                _res = res
+                if destination.pan_band and destination.pan_band==band:
+                    _res = res/2
+                
+                command += ' -r %s' % _res
 
             if bounds:
                 command += ' --bounds "%s"' % bounds
