@@ -18,6 +18,8 @@ from . import settings
 
 class Operation(object):
 
+    _serializable_attrs = ['method', 'kwargs', 'commit']
+
     def __init__(self):
         pass
 
@@ -40,13 +42,13 @@ class Operation(object):
         return self
 
 
-    def deserialize(self, serialized_operation):
+    def deserialize(self, props):
 
-        for attr in ['method', 'kwargs', 'commit']:
-            setattr(self, attr, serialized_operation[attr])
+        for attr in self._serializable_attrs:
+            setattr(self, attr, props.get(attr))
 
-        sources = serialized_operation['sources']
-        destination = serialized_operation['destination']
+        sources = props['sources']
+        destination = props['destination']
 
         self.sources = [datasets.new_dataset(d['type'], d['path'], exists=True) for d in sources]
         self.destination = datasets.new_dataset(destination['type'], destination['path'], exists=True)
@@ -56,13 +58,14 @@ class Operation(object):
 
     def serialize(self):
 
-        return {
-            'method': self.method,
-            'kwargs': self.kwargs,
-            'commit': self.commit,
-            'sources': [{'type': s.type, 'path': s.path} for s in self.sources],
-            'destination': {'type': self.destination.type, 'path': self.destination.path}
-        }
+        props = {}
+        for attr in self._serializable_attrs:
+            props[attr] = getattr(self, attr)
+
+        props['sources'] = [{'type': s.type, 'path': s.path} for s in self.sources]
+        props['destination'] = {'type': self.destination.type, 'path': self.destination.path}
+        
+        return props
 
 
 
@@ -99,7 +102,7 @@ class RasterProject(object):
     # hard-coded output options
     opts = '--overwrite --driver GTiff --co tiled=false'
 
-    serializable_attributes = ['project_root', 'project_name']
+    _serializable_attrs = ['project_root', 'project_name']
 
 
     def __init__(self, project_root, dataset_paths=None, res=None, bounds=None, reset=False):
@@ -171,7 +174,7 @@ class RasterProject(object):
     def _serialize(self):
 
         props = {}
-        for attr in self.serializable_attributes:
+        for attr in self._serializable_attrs:
             props[attr] = getattr(self, attr)
 
         props['operations'] = [operation.serialize() for operation in self.operations]
@@ -180,12 +183,12 @@ class RasterProject(object):
 
     def _deserialize(self, cached_props):
 
-        for attr in self.serializable_attributes:
+        for attr in self._serializable_attrs:
             setattr(self, attr, cached_props.get(attr))
 
         # de-serialize and validate the cached operations
         self.operations =[Operation().deserialize(op) for op in cached_props['operations']]
-        self.validate_operations()
+        self._validate_operations()
 
 
 
@@ -261,7 +264,7 @@ class RasterProject(object):
 
 
 
-    def validate_operations(self):
+    def _validate_operations(self):
         '''
         Validate operations in self.operations by checking that operation.kwargs are consistent
         with the geoTIFF metadata, to the extent that we can. 
@@ -305,7 +308,7 @@ class LandsatProject(RasterProject):
 
 
     @log_operation
-    def stack(self, source, bands=[4,3,2]):
+    def stack(self, source, bands=None):
         '''
         source: a Landsat dataset
         '''
