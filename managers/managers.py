@@ -72,9 +72,9 @@ def log_operation(method):
 
         destination = method(self, source, **kwargs)
 
-        sources = source
-        if not isinstance(sources, list):
-            sources = [sources]
+        # force source to list
+        if not isinstance(source, list):
+            source = [source]
         
         operation = Operation().create(
             destination=destination,
@@ -99,12 +99,15 @@ class RasterProject(object):
     # hard-coded output options
     opts = '--overwrite --driver GTiff --co tiled=false'
 
+    serializable_attributes = ['project_root', 'project_name']
 
-    def __init__(self, project_root, raw_datasets=None, res=None, bounds=None, reset=False):
+
+    def __init__(self, project_root, dataset_paths=None, res=None, bounds=None, reset=False):
         '''
-        project_root: path to the project directory
-        raw_datasets: a list of paths to either TIF files or Landsat scene directories
-        
+        project_root:  path to the project directory
+        dataset_paths: a list of paths to the raw/initial data files
+                       (either TIFF files, NED13 tile directories, or Landsat scene directories)
+
         '''
 
         # raw dataset type must be hard-coded in subclasses
@@ -112,71 +115,86 @@ class RasterProject(object):
 
         if not os.path.isdir(project_root):
             os.makedirs(project_root)
-        
-        self.root = re.sub(r'%s*$' % os.sep, '', project_root)
-        self.name = os.path.split(self.root)[-1]
 
-        self.props_path = os.path.join(self.root, 'props.json')
+        self.props_path = os.path.join(project_root, 'props.json')
 
-
-        # if there are cached props and we are not resetting
         if os.path.exists(self.props_path) and not reset:
-            print('Loading from existing project')
-
             if res is not None or bounds is not None:
                 print('Warning: res and bounds are ignored when loading an existing dataset')
 
-            with open(self.props_path, 'r') as file:
-                cached_props = json.load(file)                        
-
-            self.deserialize(cached_props)
-
-            # check that the cached operations match the newly serialized operations
-            new_props = self.serialize()
-            diff = deepdiff.DeepDiff(cached_props, new_props, report_repetition=True)
-
-            if diff:
-                print('WARNING: cached serialized operations are not reproducible')
-                print(diff)
+            print('Loading from existing project')
+            self._load_existing_project(project_root)
 
         else:
-            print('Generating new project')
+            if dataset_paths is None:
+                raise ValueError('Raw datasets must be provided when creating a new project')
 
-            if raw_datasets is None:
-                raise ValueError('The argument `raw_datasets` must be provided')
-
-            self.define_raw_datasets(raw_datasets)
-
-            self.operations = []
-            self.merge(self.raw_datasets, res=res, bounds=bounds)
+            print('Creating new project')
+            self._create_new_project(project_root, dataset_paths, res, bounds)
 
 
 
-    def serialize(self):
+    def _load_existing_project(self, project_root):
 
-        return {
-            'root': self.root,
-            'raw_datasets': [{'type': d.type, 'path': d.path} for d in self.raw_datasets],
-            'operations': [operation.serialize() for operation in self.operations],
-        }
+        with open(self.props_path, 'r') as file:
+            cached_props = json.load(file)                        
+
+        self._deserialize(cached_props)
+
+        # check that the cached operations match the newly serialized operations
+        new_props = self._serialize()
+        diff = deepdiff.DeepDiff(cached_props, new_props, report_repetition=True)
+
+        if diff:
+            print('WARNING: cached serialized operations are not reproducible')
+            print(diff)
 
 
-    def deserialize(self, cached_props):
 
-        # de-serialize the raw datasets
-        self.define_raw_datasets([d['path'] for d in cached_props['raw_datasets']])
+    def _create_new_project(self, project_root, dataset_paths, res, bounds):
+
+        self.operations = []
+        self.project_root = re.sub(r'%s*$' % os.sep, '', project_root)
+        self.project_name = os.path.split(self.project_root)[-1]
+
+        if type(dataset_paths) is str:
+            dataset_paths = [dataset_paths]
+
+        raw_datasets = [
+            datasets.new_dataset(self.raw_dataset_type, path, is_raw=True, exists=True) 
+            for path in dataset_paths]
+
+        self.merge(raw_datasets, res=res, bounds=bounds)
+
+
+
+    def _serialize(self):
+
+        props = {}
+        for attr in self.serializable_attributes:
+            props[attr] = getattr(self, attr)
+
+        props['operations'] = [operation.serialize() for operation in self.operations]
+        return props
+
+
+    def _deserialize(self, cached_props):
+
+        for attr in self.serializable_attributes:
+            setattr(self, attr, cached_props.get(attr))
 
         # de-serialize and validate the cached operations
         self.operations =[Operation().deserialize(op) for op in cached_props['operations']]
-
         self.validate_operations()
+
 
 
     def save_props(self):
 
-        props = self.serialize()
+        props = self._serialize()
         with open(self.props_path, 'w') as file:
             json.dump(props, file)
+
 
 
     def get_operation(self, index):
@@ -199,47 +217,28 @@ class RasterProject(object):
         Note that we use the timestamp as a primitive kind of hash to guarantee a unique filename
         '''
 
-        timestamp = datetime.datetime.strftime(datetime.datetime.now(), '%Y%m%d_%H%M%S')
-        name = '%s_%s_%s' % (self.name, method, timestamp)
-        path = os.path.join(self.root, name)
+        timestamp = datetime.datetime.strftime(datetime.datetime.now(), '%Y%m%d-%H%M%S')
+        filename = '%s_%s_%s' % (self.project_name, method, timestamp)
+        path = os.path.join(self.project_root, filename)
         return datasets.new_dataset(dataset_type, path, exists=False)
 
 
 
-    def define_raw_datasets(self, paths, root=None):
-        '''
-        Define the raw dataset(s) from which we will generate the derived dataset
-        
-        path: path or list of paths to the raw datasets
-        (either tifs, NED13 tile directories, or landsat scene directories)
-
-        '''
-
-        if type(paths) is str:
-            paths = [paths]
-
-        if root is not None:
-            paths = [os.path.join(root, path) for path in paths]
-    
-        self.raw_datasets = [
-            datasets.new_dataset(self.raw_dataset_type, path, is_raw=True, exists=True) for path in paths]
-
 
     @log_operation
-    def merge(self, source, res=None, bounds=None):
+    def merge(self, sources, res=None, bounds=None):
         '''
         Create the root dataset by merging and/or cropping the raw dataset(s).
 
-        Note that this method is the only way to create a root derived dataset;
-        that is, the source must be equal to self.raw_datasets,
-        and the root/first operation in self.operations must be a call to this method.
+        Note that this method is the only way to create the root derived dataset;
+        that is, `sources` should correspond to `dataset_paths` in __init__,
+        and the root/first operation in self.operations should be a call to this method.
         
         For now, we don't enforce these conventions. 
         '''
 
-        assert isinstance(source, list)        
-        sources = source
-
+        assert isinstance(sources, list)        
+        
         destination = self._new_dataset(self.raw_dataset_type, method='merge')
 
         for band in destination.expected_bands:

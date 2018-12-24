@@ -87,7 +87,7 @@ class GeoTIFF(Dataset):
     def _validate(self):
 
         if not os.path.isfile(self.path):
-            raise ValueError('%s is not a file' % self.path)
+            raise FileNotFoundError('%s does not exist' % self.path)
 
 
 
@@ -129,7 +129,7 @@ class LandsatScene(Dataset):
 
         if self.exists:         
             if not os.path.isdir(self.path):
-                raise ValueError('%s is not a directory' % self.path)
+                raise FileNotFoundError('%s is not a directory' % self.path)
         else:
             os.makedirs(self.path, exist_ok=True)
 
@@ -189,7 +189,7 @@ class LandsatScene(Dataset):
         if self.exists:
             bandpath = self._bandpaths.get(band)
             if bandpath is None:
-                raise ValueError('B%s does not exist for scene %s' % (band, self.name))
+                raise FileNotFoundError('B%s does not exist for scene %s' % (band, self.name))
         else:
             bandpath = os.path.join(self.path, '%s_B%s.TIF' % (self.name, band))
             
