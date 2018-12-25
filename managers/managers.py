@@ -33,7 +33,7 @@ def log_operation(method):
         )
 
         self.operations.append(operation)
-        self.save_props()
+        # self.save_props()
 
     return wrapper
 
@@ -50,7 +50,7 @@ class RasterProject(object):
     _serializable_attrs = ['project_root', 'project_name']
 
 
-    def __init__(self, project_root, dataset_paths=None, res=None, bounds=None, reset=False):
+    def __init__(self, project_root, dataset_paths=None, res=None, bounds=None, reset=False, refresh=False):
         '''
         project_root:  path to the project directory
         dataset_paths: a list of paths to the raw/initial data files
@@ -71,7 +71,7 @@ class RasterProject(object):
                 print('Warning: res and bounds are ignored when loading an existing dataset')
 
             print('Loading from existing project')
-            self._load_existing_project(project_root)
+            self._load_existing_project(project_root, refresh)
 
         else:
             if dataset_paths is None:
@@ -82,12 +82,12 @@ class RasterProject(object):
 
 
 
-    def _load_existing_project(self, project_root):
+    def _load_existing_project(self, project_root, refresh):
 
         with open(self.props_path, 'r') as file:
             cached_props = json.load(file)                        
 
-        self._deserialize(cached_props)
+        self._deserialize(cached_props, refresh)
 
         # check that the cached operations match the newly serialized operations
         new_props = self._serialize()
@@ -126,15 +126,28 @@ class RasterProject(object):
         return props
 
 
-    def _deserialize(self, cached_props):
+    def _deserialize(self, cached_props, refresh):
 
         for attr in self._serializable_attrs:
             setattr(self, attr, cached_props.get(attr))
 
         # de-serialize and validate the cached operations
-        self.operations =[operations.Operation().deserialize(op) for op in cached_props['operations']]
+        self.operations =[]
+        for op in cached_props['operations']:
+            if refresh:
+                self.operations.append(operations.Operation(exists=False).deserialize(op))
+                # TODO: re-run all of the operations (in order) using self._run_operation
+            else:
+                try:
+                    self.operations.append(operations.Operation(exists=True).deserialize(op))
+                except FileNotFoundError:
+                    print('WARNING: source and/or destination files are missing for operation %s' % op)
+
         self._validate_operations()
 
+
+    def _run_operation(self, operation):
+        getattr(self, operation.method)(operation.source[0], **operation.kwargs)
 
 
     def save_props(self):

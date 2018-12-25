@@ -7,8 +7,9 @@ class Operation(object):
 
     _serializable_attrs = ['method', 'kwargs', 'commit']
 
-    def __init__(self):
-        pass
+    def __init__(self, exists=False):
+        self.exists = exists
+
 
     def __repr__(self):
         return json.dumps(self.serialize())
@@ -41,8 +42,8 @@ class Operation(object):
         source = props['source']
         destination = props['destination']
 
-        self.source = [datasets.new_dataset(d['type'], d['path'], exists=True) for d in source]
-        self.destination = datasets.new_dataset(destination['type'], destination['path'], exists=True)
+        self.source = [datasets.new_dataset(d['type'], d['path'], exists=self.exists) for d in source]
+        self.destination = datasets.new_dataset(destination['type'], destination['path'], exists=self.exists)
 
         return self
 
