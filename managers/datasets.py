@@ -24,6 +24,7 @@ def new_dataset(dataset_type, path, **kwargs):
     return dataset
 
 
+
 class Dataset(object):
     '''
     Generic dataset
@@ -42,8 +43,7 @@ class Dataset(object):
         # path is either the path to a TIFF *file* or to a Landsat/NED13 *directory*
         self.path = path
 
-        # whether the dataset is raw
-        # (for reference only)
+        # whether the dataset is raw (for reference/sanity checks only)
         self.is_raw = is_raw
 
         # whether the dataset already exists

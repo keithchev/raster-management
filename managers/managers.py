@@ -14,7 +14,7 @@ import numpy as np
 from . import utils
 from . import settings
 from . import datasets
-from . import operations
+from .operations import Operation
 
 
 
@@ -24,7 +24,7 @@ def log_operation(method):
 
         destination = method(self, source, **kwargs)
 
-        operation = operations.Operation().create(
+        operation = Operation(
             destination=destination,
             source=source,
             kwargs=kwargs,
@@ -55,6 +55,11 @@ class RasterProject(object):
         project_root:  path to the project directory
         dataset_paths: a list of paths to the raw/initial data files
                        (either TIFF files, NED13 tile directories, or Landsat scene directories)
+
+        reset: when loading an existing project, whether to delete existing datasets and cached operations
+        refresh: when loading an existing project, whether to re-run all of the existing operations
+
+        TODO: implement re-running cached operations when refresh=True using self._run_operation
 
         '''
 
@@ -88,6 +93,7 @@ class RasterProject(object):
             cached_props = json.load(file)                        
 
         self._deserialize(cached_props, refresh)
+        self._validate_operations()
 
         # check that the cached operations match the newly serialized operations
         new_props = self._serialize()
@@ -131,19 +137,8 @@ class RasterProject(object):
         for attr in self._serializable_attrs:
             setattr(self, attr, cached_props.get(attr))
 
-        # de-serialize and validate the cached operations
-        self.operations =[]
-        for op in cached_props['operations']:
-            if refresh:
-                self.operations.append(operations.Operation(exists=False).deserialize(op))
-                # TODO: re-run all of the operations (in order) using self._run_operation
-            else:
-                try:
-                    self.operations.append(operations.Operation(exists=True).deserialize(op))
-                except FileNotFoundError:
-                    print('WARNING: source and/or destination files are missing for operation %s' % op)
-
-        self._validate_operations()
+        # de-serialize the cached operations
+        self.operations = [Operation.deserialize(op) for op in cached_props['operations']]
 
 
     def _run_operation(self, operation):
@@ -235,6 +230,14 @@ class RasterProject(object):
         
         For now, we only check that the `res` and `bounds` of the initial merge operation
         are consistent with the root derived dataset.
+        
+        TODO: add existence checks for all operations' datasets
+        (once we add setter/getter for Dataset.exists):
+
+        try:
+            operation.exists = True
+        except FileNotFoundError:
+           print('WARNING: source and/or destination files are missing for operation %s' % operation)
 
         '''
 

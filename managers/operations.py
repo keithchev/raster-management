@@ -7,15 +7,12 @@ class Operation(object):
 
     _serializable_attrs = ['method', 'kwargs', 'commit']
 
-    def __init__(self, exists=False):
-        self.exists = exists
-
 
     def __repr__(self):
         return json.dumps(self.serialize())
 
 
-    def create(self, source, destination, method, kwargs, commit):
+    def __init__(self, source, destination, method, kwargs, commit):
 
         # force source to list
         if not isinstance(source, list):
@@ -31,21 +28,14 @@ class Operation(object):
         self.kwargs = kwargs
         self.commit = commit
 
-        return self
 
+    @classmethod
+    def deserialize(cls, props):
 
-    def deserialize(self, props):
+        source = [datasets.new_dataset(d['type'], d['path']) for d in props['source']]
+        destination = datasets.new_dataset(props['destination']['type'], props['destination']['path'])
 
-        for attr in self._serializable_attrs:
-            setattr(self, attr, props.get(attr))
-
-        source = props['source']
-        destination = props['destination']
-
-        self.source = [datasets.new_dataset(d['type'], d['path'], exists=self.exists) for d in source]
-        self.destination = datasets.new_dataset(destination['type'], destination['path'], exists=self.exists)
-
-        return self
+        return cls(source, destination, props.get('method'), props.get('kwargs'), props.get('commit'))
 
 
     def serialize(self):
