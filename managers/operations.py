@@ -9,7 +9,8 @@ class Operation(object):
 
 
     def __repr__(self):
-        return json.dumps(self.serialize())
+        return 'Operation(\n\tmethod=\'%s\', \n\tkwargs=%s, \n\tsource=\'%s\', \n\tdestination=\'%s\')' % \
+            (self.method, self.kwargs, self._source[0].path, self._destination[0].path)
 
 
     def __init__(self, source, destination, method, kwargs, commit):
