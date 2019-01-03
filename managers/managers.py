@@ -60,6 +60,7 @@ class RasterProject(object):
         refresh: when loading an existing project, whether to re-run all of the existing operations
 
         TODO: implement re-running cached operations when refresh=True using self._run_operation
+        TODO: clean up/simplify the initialization logic (_load_existing_project vs _create_new_project)
 
         '''
 
@@ -71,14 +72,19 @@ class RasterProject(object):
 
         self.props_path = os.path.join(project_root, 'props.json')
 
-        if os.path.exists(self.props_path) and not reset:
+        if not reset:
+            if not os.path.exists(self.props_path):
+                raise FileNotFoundError('No cached props found at %s' % self.props_path)
             if res is not None or bounds is not None:
                 print('Warning: res and bounds are ignored when loading an existing dataset')
 
             print('Loading from existing project')
             self._load_existing_project(project_root, refresh)
 
+        # we're resetting or starting from scratch
         else:
+            if os.path.exists(self.props_path):
+                print('Warning: resetting project, but cached props already exist')
             if dataset_paths is None:
                 raise ValueError('Raw datasets must be provided when creating a new project')
 
@@ -194,14 +200,14 @@ class RasterProject(object):
         '''
 
         assert isinstance(source, list)     
-        for _source in source:
-            assert(_source.type==self.raw_dataset_type)   
+        for dataset in source:
+            assert(dataset.type==self.raw_dataset_type)   
         
         destination = self._new_dataset(self.raw_dataset_type, method='merge')
 
         for band in destination.expected_bands:
     
-            srs = ' '.join([d.bandpath(band) for d in source])
+            srs = ' '.join([dataset.bandpath(band) for dataset in source])
             dst = destination.bandpath(band)
 
             command = '%s merge %s' % (self.rio, self.opts)
