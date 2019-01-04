@@ -1,19 +1,20 @@
 
 import json
+import datetime
 from . import datasets
 
 
 class Operation(object):
 
-    _serializable_attrs = ['method', 'kwargs', 'commit']
+    _serializable_attrs = ['method', 'kwargs', 'commit', 'timestamp']
 
 
     def __repr__(self):
-        return 'Operation(\n\tmethod=\'%s\', \n\tkwargs=%s, \n\tsource=\'%s\', \n\tdestination=\'%s\')' % \
+        return 'Operation(\n    method=\'%s\',\n    kwargs=%s,\n    source=\'%s\',\n    destination=\'%s\')' % \
             (self.method, self.kwargs, self._source[0].path, self._destination[0].path)
 
 
-    def __init__(self, source, destination, method, kwargs, commit):
+    def __init__(self, source, destination, method=None, kwargs=None, commit=None):
 
         # note: source is sometimes a single Dataset and sometimes a list of Datasets
         # for consistency, we force the internal _source and _destination attributes to lists
@@ -33,6 +34,7 @@ class Operation(object):
         self.method = method
         self.kwargs = kwargs
         self.commit = commit
+        self.timestamp = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M')
 
 
     @property
@@ -55,7 +57,11 @@ class Operation(object):
         source = [datasets.new_dataset(d['type'], d['path']) for d in props['source']]
         destination = [datasets.new_dataset(d['type'], d['path']) for d in props['destination']]
 
-        return cls(source, destination, props.get('method'), props.get('kwargs'), props.get('commit'))
+        instance = cls(source, destination)
+        for attr in instance._serializable_attrs:
+            setattr(instance, attr, props.get(attr))
+
+        return instance
 
 
     def serialize(self):

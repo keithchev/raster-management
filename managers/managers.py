@@ -42,12 +42,17 @@ def log_operation(method):
 class RasterProject(object):
     
     # path to rasterio CLI
-    rio = settings.RIO_CLI
+    _rio = settings.RIO_CLI
 
     # hard-coded output options
-    opts = '--overwrite --driver GTiff --co tiled=false'
+    _opts = '--overwrite --driver GTiff --co tiled=false'
 
-    _serializable_attrs = ['project_root', 'project_name']
+    _serializable_attrs = [
+        'project_root', 
+        'project_name', 
+        'project_created_on', 
+        'raw_dataset_type',
+    ]
 
 
     def __init__(self, project_root, dataset_paths=None, res=None, bounds=None, reset=False, refresh=False):
@@ -116,6 +121,7 @@ class RasterProject(object):
         self.operations = []
         self.project_root = re.sub(r'%s*$' % os.sep, '', project_root)
         self.project_name = os.path.split(self.project_root)[-1]
+        self.project_created_on = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M')
 
         if type(dataset_paths) is str:
             dataset_paths = [dataset_paths]
@@ -210,7 +216,7 @@ class RasterProject(object):
             srs = ' '.join([dataset.bandpath(band) for dataset in source])
             dst = destination.bandpath(band)
 
-            command = '%s merge %s' % (self.rio, self.opts)
+            command = '%s merge %s' % (self._rio, self._opts)
 
             if res:
                 _res = res
@@ -290,7 +296,7 @@ class LandsatProject(RasterProject):
         destination = self._new_dataset('tif', method='stack')
 
         utils.shell('%s stack --overwrite --rgb %s %s' % \
-              (self.rio, ' '.join([source.bandpath(b) for b in bands]), destination.path))
+              (self._rio, ' '.join([source.bandpath(b) for b in bands]), destination.path))
 
         return destination
 
