@@ -3,6 +3,8 @@ import os
 import sys
 import json
 import subprocess
+import numpy as np
+
 from . import settings
 
 
@@ -32,8 +34,11 @@ def current_commit():
 
 def transform(bounds, dst_crs):
     '''
-    `bounds` is a list of [lon_min, lat_min, lon_max, lat_max]
-    `dst_crs` is a path to a geoTIFF whose crs the bounds will be transformed to
+    Transform lat/lon bounds to a given crs
+
+    bounds : a list of [lon_min, lat_min, lon_max, lat_max]
+    dst_crs : a path to a geoTIFF whose crs the bounds will be transformed to
+    
     '''
     
     bounds = shell(
@@ -41,3 +46,27 @@ def transform(bounds, dst_crs):
         verbose=False)
 
     return json.loads(bounds)
+
+
+def autogain_image(im, percentile=None):
+    '''
+    Autogain an image
+
+    im : a numpy array
+    percentile : an integer between 0 and 100
+       
+    '''
+    
+    im = im.astype(float)
+
+    # default to min/max
+    if percentile is None:
+        percentile = 100
+
+    minn, maxx = np.percentile(im[:], [100 - percentile, percentile])
+
+    im -= minn
+    im /= (maxx - minn)
+    im[im < 0] = 0
+    im[im > 1] = 1
+    return im

@@ -47,6 +47,9 @@ class RasterProject(object):
     # hard-coded output options
     _opts = '--overwrite --driver GTiff --co tiled=false'
 
+    # temp dir
+    _tmp_dir = os.path.join(os.getenv('HOME'), 'tmp')
+
     _serializable_attrs = [
         'project_root', 
         'project_name', 
@@ -154,7 +157,9 @@ class RasterProject(object):
 
 
     def _run_operation(self, operation):
-        getattr(self, operation.method)(operation.source[0], **operation.kwargs)
+
+        # TODO: finish implementing this
+        getattr(self, operation.method)(operation.source, **operation.kwargs)
 
 
     def save_props(self):
@@ -200,7 +205,7 @@ class RasterProject(object):
 
         Note that this method is the only way to create the root derived dataset;
         that is, `source` should correspond to `dataset_paths` in __init__,
-        and the root/first operation in self.operations should be a call to this method.
+        and the zeroth operation in self.operations should always correspond to this method.
         
         For now, we don't enforce these conventions. 
         '''
@@ -233,6 +238,71 @@ class RasterProject(object):
 
         return destination
 
+
+    @log_operation
+    def crop(self, source, bounds=None):
+        '''
+        Crop any single dataset given bounds
+        '''
+        pass
+
+
+    @log_operation
+    def multiply(self, sources, gamma=None):
+        '''
+        Multiply an RGB tif by a black-and-white tif
+
+        We assume that one of the datasets in sources is a single-channel (BW) tif,
+        and the other is an RGB (color) tif
+
+        '''
+        images = []
+        for source in sources:
+            with rasterio.open(source.path) as src:
+                images.append(src.read().astype('float'))
+
+        if images[0].shape[0]==1 and images[1].shape[0]==3:
+            im_bw, im_rgb = images
+        elif images[1].shape[0]==1 and images[0].shape[0]==3:
+            im_rgb, im_bw = images
+        else:
+            raise ValueError('Unexpected image dimensions: %s, %s' % (images[0].shape, images[1].shape))
+
+        # rasterio loads the color channel into the first dimension
+        im_bw = im_bw[0, :, :]
+        im_rgb = np.swapaxes(im_rgb, 0, 1)
+        im_rgb = np.swapaxes(im_rgb, 1, 2)
+
+        # multiply-blend the BW image with the RGB image
+        im_bw = utils.autogain_image(im_bw, percentile=100)
+        im_rgb *= im_bw[:, :, None]
+        im_rgb = utils.autogain_image(im_rgb, percentile=100)
+
+        if gamma:
+            im_rgb **= .9
+
+        # hard-coded 'uint8' dtype for now
+        dtype = 'uint8'
+        dtype_max = 255
+    
+        im_rgb = (im_rgb*dtype_max).astype(dtype)
+
+        # move the color channel into the first dimension
+        im_rgb = np.concatenate(
+            (im_rgb[None, :, :, 0], im_rgb[None, :, :, 1], im_rgb[None, :, :, 2]),
+            axis=0)
+
+        # destination dataset
+        destination = self._new_dataset('tif', method='multiply')
+
+        with rasterio.open(sources[0].path) as src:
+            dst_profile = src.profile
+            dst_profile['dtype'] = dtype
+            dst_profile['count'] = 3
+            with rasterio.open(destination.path, 'w', **dst_profile) as dst:
+                dst.write(im_rgb)
+
+        return destination
 
 
     def _validate_operations(self):
@@ -289,7 +359,8 @@ class LandsatProject(RasterProject):
     @log_operation
     def stack(self, source, bands=None):
         '''
-        source: a Landsat dataset
+        source : a Landsat dataset
+        bands : a list of three Landsat bands
         '''
 
         bands = list(map(str, bands))
@@ -301,12 +372,19 @@ class LandsatProject(RasterProject):
         return destination
 
 
+
     @log_operation
     def autogain(self, source, percentile=None, each_band=True):
         '''
         Autogain an RGB image
+        
+        Parameters
+        ----------
 
-        source: dataset object representing an RGB geoTIFF
+        source : a dataset representing an RGB geoTIFF
+
+        percentile : integer percentile with which to calculate min/max intensities
+            if None, absolute min/max are used
         
         '''
 
@@ -314,20 +392,8 @@ class LandsatProject(RasterProject):
         dtype = 'uint8'
         dtype_max = 255
 
-        # default to min/max
-        if percentile is None:
-            percentile = 100
-
         # destination dataset
         destination = self._new_dataset('tif', method='autogain')
-                
-        def _autogain(im, percentile):
-            minn, maxx = np.percentile(im[:], [100 - percentile, percentile])
-            im -= minn
-            im /= (maxx - minn)
-            im[im < 0] = 0
-            im[im > 1] = 1
-            return im
 
         with rasterio.open(source.path) as src:
             dst_profile = src.profile
@@ -338,10 +404,10 @@ class LandsatProject(RasterProject):
                     im_dst = np.zeros((len(src.indexes),) + src.shape)
                     for ind, band in enumerate(src.indexes):
                         im = src.read(band).astype('float64')
-                        im_dst[ind, :, :] = _autogain(im, percentile)
+                        im_dst[ind, :, :] = utils.autogain_image(im, percentile)
                 else:
                     im = src.read().astype('float64')
-                    im_dst = _autogain(im, percentile)
+                    im_dst = utils.autogain_image(im, percentile)
 
                 im_dst *= dtype_max
                 im_dst = im_dst.astype(dtype)
@@ -367,5 +433,43 @@ class DEMProject(RasterProject):
         return destination
 
 
+    @log_operation
+    def color_relief(self, source, colormap=None):
+        '''
+        Wrapper for gdaldem color-relief command
+
+        Parameters
+        ---------
+        source : a DEM as a single tif dataset
+
+        colormap : a list of elevation-color dicts of the form 
+            {'elevation': <elevation>, 'color': (float, float, float)}
+        
+        For now, we assume that the DEM elevations are in meters,
+        and the colormap elevations are in feet.
+
+        '''
+        
+        if colormap is None:
+            raise ValueError('A colormap must be provided')
+
+        # coerce colors to float for JSON-ability
+        for row in colormap:
+            row['color'] = tuple(np.array(row['color']).astype(float))
+
+        # gdaldem requires the colormap be a file in which each line is of the form
+        # '<elevation> <uint8> <uint8> <uint8>\n'
+        colormap_filename = os.path.join(self._tmp_dir, 'colormap.txt')
+        with open(colormap_filename, 'w') as file:
+            for row in colormap:
+                file.write('%d %d %d %d\n' % ((row['elevation'],) + row['color']))
+
+        destination = self._new_dataset('tif', method='color_relief')
+
+        utils.shell('gdaldem color-relief %s %s %s' % \
+            (source.path, colormap_filename, destination.path))
+
+        os.remove(colormap_filename)
+        return destination
 
 

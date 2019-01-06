@@ -93,7 +93,6 @@ class GeoTIFF(Dataset):
             raise FileNotFoundError('%s does not exist' % self.path)
 
 
-
     def bandpath(self, band=None):
         '''
         For TIFF files, there is only one 'band' (the TIFF file),
