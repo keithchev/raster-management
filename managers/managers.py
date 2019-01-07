@@ -268,6 +268,13 @@ class RasterProject(object):
 
     @log_operation
     def warp(self, source, crs=None, res=None):
+        '''
+        Reproject and possible resample a tif dataset
+
+        Note that resampling must be 'cubic' to avoid grid-like artifacts
+        in hillshading of un-downsampled NED13-based datasets
+
+        '''
 
         if crs is None:
             raise ValueError('a crs must be provided')

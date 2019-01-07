@@ -1,4 +1,5 @@
 
+import os
 import json
 import datetime
 from . import datasets
@@ -10,8 +11,12 @@ class Operation(object):
 
 
     def __repr__(self):
-        return 'Operation(\n    method=\'%s\',\n    kwargs=%s,\n    source=\'%s\',\n    destination=\'%s\')' % \
-            (self.method, self.kwargs, self._source[0].path, self._destination[0].path)
+
+        def _clean(path):
+            return path.split(os.sep)[-1]
+
+        return 'Operation(\n    method=\'%s\',\n    kwargs=%s,\n    source=%s,\n    destination=%s)' % \
+            (self.method, self.kwargs, [_clean(d.path) for d in self._source], [_clean(d.path) for d in self._destination])
 
 
     def __init__(self, source, destination, method=None, kwargs=None, commit=None):
