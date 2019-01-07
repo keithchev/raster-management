@@ -4,6 +4,7 @@ import re
 import sys
 import glob
 import json
+import shutil
 import deepdiff
 import datetime
 import rasterio
@@ -75,9 +76,6 @@ class RasterProject(object):
         # raw dataset type must be hard-coded in subclasses
         assert hasattr(self, 'raw_dataset_type')
 
-        if not os.path.isdir(project_root):
-            os.makedirs(project_root)
-
         self.props_path = os.path.join(project_root, 'props.json')
 
         if not reset:
@@ -91,12 +89,14 @@ class RasterProject(object):
 
         # we're resetting or starting from scratch
         else:
-            if os.path.exists(self.props_path):
-                print('Warning: resetting project, but cached props already exist')
             if dataset_paths is None:
                 raise ValueError('Raw datasets must be provided when creating a new project')
 
             print('Creating new project')
+            if os.path.isdir(project_root):
+                shutil.rmtree(project_root)
+            os.makedirs(project_root)
+
             self._create_new_project(project_root, dataset_paths, res, bounds)
 
 
@@ -245,6 +245,23 @@ class RasterProject(object):
         Crop any single dataset given bounds
         '''
         pass
+
+
+    @log_operation
+    def warp(self, source, crs=None, res=None):
+
+        if crs is None:
+            raise ValueError('a crs must be provided')
+
+        destination = self._new_dataset('tif', method='warp')
+        command = '%s warp %s --resampling cubic --dst-crs %s' % (self._rio, self._opts, crs)
+
+        if res:
+            command += ' -r %s' % res
+
+        utils.shell(command + ' %s %s' % (source.path, destination.path))
+        
+        return destination
 
 
     @log_operation
@@ -449,7 +466,8 @@ class DEMProject(RasterProject):
         and the colormap elevations are in feet.
 
         '''
-        
+        feet_per_meter = 3.28
+
         if colormap is None:
             raise ValueError('A colormap must be provided')
 
@@ -462,14 +480,14 @@ class DEMProject(RasterProject):
         colormap_filename = os.path.join(self._tmp_dir, 'colormap.txt')
         with open(colormap_filename, 'w') as file:
             for row in colormap:
-                file.write('%d %d %d %d\n' % ((row['elevation'],) + row['color']))
+                file.write('%d %d %d %d\n' % ((row['elevation']/feet_per_meter,) + row['color']))
 
         destination = self._new_dataset('tif', method='color_relief')
 
         utils.shell('gdaldem color-relief %s %s %s' % \
             (source.path, colormap_filename, destination.path))
 
-        os.remove(colormap_filename)
+        # os.remove(colormap_filename)
         return destination
 
 
