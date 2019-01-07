@@ -23,6 +23,12 @@ def log_operation(method):
 
     def wrapper(self, source, **kwargs):
 
+        if isinstance(source, list):
+            source = [s.destination if isinstance(s, Operation) else s for s in source]
+        
+        if isinstance(source, Operation):
+            source = source.destination
+
         destination = method(self, source, **kwargs)
 
         operation = Operation(
@@ -170,16 +176,24 @@ class RasterProject(object):
 
 
 
-    def get_operation(self, index):
+    def get_operation(self, index, method=None):
+
+        ops = self.operations
+
+        if method:
+            ops = [op for op in ops if op.method==method]
+            if not ops:
+                print('No operations exist for method `%s`' % method)
+                return None
 
         if index=='last':
-            pass
-
+            return ops[-1]
+            
         if index=='first':
-            pass
+            return ops[0]
 
         if type(ind) is int:
-            pass
+            return ops[ind]
 
 
 
