@@ -12,7 +12,7 @@ def new_dataset(dataset_type, path, **kwargs):
 
     dataset_types = {
         'landsat': 'LandsatScene',
-        'ned': 'NED13Tile',
+        'ned13': 'NED13Tile',
         'tif': 'GeoTIFF',
     }
 
@@ -53,6 +53,10 @@ class Dataset(object):
         # (only not [None] for Landsat datasets)
         self.expected_bands = [None]
 
+        # placeholder for the single 'band' of non-Landsat datasets
+        # (for consistency with Landsat dataset API)
+        self.bands = [None]
+
         # the panchromatic band (for Landsat datasets only)
         self.pan_band = None
 
@@ -70,10 +74,6 @@ class GeoTIFF(Dataset):
         # the dataset name is the filename itself
         self.name = base.split(os.sep)[-1]
 
-        # placeholder for the single 'band'
-        # (for consistency with Landsat dataset API)
-        self.bands = self.expected_bands
-
         # the path doesn't need to include the extension
         # (if it doesn't, and exists=True, we assume that it's '.TIF')
         if not ext:
@@ -84,13 +84,8 @@ class GeoTIFF(Dataset):
             raise ValueError('%s is not a TIFF file' % self.path)
 
         if self.exists:
-            self._validate()
-
-
-    def _validate(self):
-
-        if not os.path.isfile(self.path):
-            raise FileNotFoundError('%s does not exist' % self.path)
+            if not os.path.isfile(self.path):
+                raise FileNotFoundError('%s does not exist' % self.path)
 
 
     def bandpath(self, band=None):
@@ -104,8 +99,36 @@ class GeoTIFF(Dataset):
 
 
 class NED13Tile(Dataset):
-    pass
 
+    def __init__(self, path):
+
+        # NED13 tile datasets are always raw and must exist
+        # (since we never create these datasets, only read them)
+        super().__init__(path, is_raw=True, exists=True)
+
+        self.type = 'ned13'
+
+        # the dataset name is the tile directory name
+        self.name = self.path.split(os.sep)[-1]
+
+        # the adf file is always in the subdirectory beginning with 'grd'
+        subdir = [
+            s for s in glob.glob(os.path.join(self.path, 'grd*')) if os.path.isdir(s)]
+
+        if len(subdir)!=1:
+            raise ValueError('No grdn subdir in %s' % self.path)
+        subdir = subdir[0]
+
+        # the adf file itself always has the same name
+        self.adf_path = os.path.join(self.path, subdir, 'w001001.adf')
+        
+        # fingers crossed...
+        if not os.path.isfile(self.adf_path):
+            raise FileNotFoundError('%s does not exist' % self.adf_path)
+
+
+    def bandpath(self, band=None):
+        return self.adf_path
 
 
 class LandsatScene(Dataset):
