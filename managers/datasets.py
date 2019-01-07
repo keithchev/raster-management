@@ -100,7 +100,7 @@ class GeoTIFF(Dataset):
 
 class NED13Tile(Dataset):
 
-    def __init__(self, path):
+    def __init__(self, path, **kwargs):
 
         # NED13 tile datasets are always raw and must exist
         # (since we never create these datasets, only read them)

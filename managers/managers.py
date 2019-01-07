@@ -228,7 +228,12 @@ class RasterProject(object):
         for dataset in source:
             assert(dataset.type==self.raw_dataset_type)   
         
-        destination = self._new_dataset(self.raw_dataset_type, method='merge')
+        if self.raw_dataset_type=='ned13':
+            output_dataset_type = 'tif'
+        else:
+            output_dataset_type = self.raw_dataset_type
+
+        destination = self._new_dataset(output_dataset_type, method='merge')
 
         for band in destination.expected_bands:
     
@@ -452,7 +457,24 @@ class DEMProject(RasterProject):
 
     def __init__(self, *args, **kwargs):
 
-        self.raw_dataset_type = 'tif'
+        # assume raw NED13 tiles to start (i.e., .adf files)
+        self.raw_dataset_type = 'ned13'
+
+        # hackish way to determine whether the raw datasets are actually tifs instead of adfs
+        # (note that if dataset_paths doesn't exist, self.raw_dataset_type 
+        # will be overwritten during deserialization)
+        
+        paths = kwargs.get('dataset_paths')
+        if paths:
+            if not isinstance(paths, list):
+                paths = [paths]
+
+            try:
+                datasets.new_dataset('ned13', paths[0])
+            except:
+                self.raw_dataset_type = 'tif'
+
+        print(self.raw_dataset_type)
         super().__init__(*args, **kwargs)
 
 
