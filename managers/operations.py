@@ -7,7 +7,7 @@ from . import datasets
 
 class Operation(object):
 
-    _serializable_attrs = ['method', 'kwargs', 'commit', 'timestamp']
+    _serializable_attrs = ['method', 'command', 'kwargs', 'commit', 'timestamp']
 
 
     def __repr__(self):
@@ -19,7 +19,7 @@ class Operation(object):
             (self.method, self.kwargs, [_clean(d.path) for d in self._source], [_clean(d.path) for d in self._destination])
 
 
-    def __init__(self, source, destination, method=None, kwargs=None, commit=None):
+    def __init__(self, source, destination, method=None, command=None, kwargs=None, commit=None):
 
         # note: source is sometimes a single dataset and sometimes a list of datasets
         # for consistency, we force the internal _source and _destination attributes to lists
@@ -39,6 +39,7 @@ class Operation(object):
         self.method = method
         self.kwargs = kwargs
         self.commit = commit
+        self.command = command
         self.timestamp = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M')
 
 

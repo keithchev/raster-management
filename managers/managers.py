@@ -29,7 +29,7 @@ def log_operation(method):
         if isinstance(source, Operation):
             source = source.destination
 
-        destination = method(self, source, **kwargs)
+        destination, command = method(self, source, **kwargs)
         if destination is None:
             raise ValueError('method %s must return a dataset object' % method)
 
@@ -38,7 +38,8 @@ def log_operation(method):
             source=source,
             kwargs=kwargs,
             method=method.__name__, 
-            commit=utils.current_commit()
+            commit=utils.current_commit(),
+            command=command
         )
 
         if log:
@@ -256,7 +257,7 @@ class RasterProject(object):
             command += ' %s %s' % (srs, dst)
             utils.shell(command, verbose=False)
 
-        return destination
+        return destination, command
 
 
     @log_operation
@@ -286,9 +287,10 @@ class RasterProject(object):
         if res:
             command += ' -r %s' % res
 
-        utils.shell(command + ' %s %s' % (source.path, destination.path))
-        
-        return destination
+        command += ' %s %s' % (source.path, destination.path)
+
+        utils.shell(command)
+        return destination, command
 
 
     @log_operation
@@ -350,7 +352,10 @@ class RasterProject(object):
             with rasterio.open(destination.path, 'w', **dst_profile) as dst:
                 dst.write(im_rgb)
 
-        return destination
+        # we never used a CLI
+        command = None
+
+        return destination, command
 
 
     def _validate_operations(self):
@@ -414,10 +419,11 @@ class LandsatProject(RasterProject):
         bands = list(map(str, bands))
         destination = self._new_dataset('tif', method='stack')
 
-        utils.shell('%s stack --overwrite --rgb %s %s' % \
-              (self._rio, ' '.join([source.bandpath(b) for b in bands]), destination.path))
+        command = '%s stack --overwrite --rgb %s %s' % \
+              (self._rio, ' '.join([source.bandpath(b) for b in bands]), destination.path)
 
-        return destination
+        utils.shell(command)
+        return destination, command
 
 
 
@@ -461,7 +467,8 @@ class LandsatProject(RasterProject):
                 im_dst = im_dst.astype(dtype)
                 dst.write(im_dst)
 
-        return destination
+        command = None
+        return destination, command
 
 
 
@@ -494,8 +501,10 @@ class DEMProject(RasterProject):
     def hill_shade(self, source):
 
         destination = self._new_dataset('tif', method='hill_shade')
-        utils.shell('%s hillshade %s %s' % (self.gdaldem, source.path, destination.path))
-        return destination
+        command = '%s hillshade %s %s' % (self.gdaldem, source.path, destination.path)
+        utils.shell(command)
+
+        return destination, command
 
 
     @log_operation
@@ -521,7 +530,10 @@ class DEMProject(RasterProject):
             (self.gdaldem, slope_filepath, colormap_filename, destination.path))
 
         os.remove(slope_filepath)
-        return destination
+
+        # we used two GDAL CLI commands, so let's not worry about how to capture them
+        command = None
+        return destination, command
 
 
     @log_operation
@@ -560,7 +572,8 @@ class DEMProject(RasterProject):
         for ext in ['tfw', 'prj']:
             os.remove(destination.path.replace('.TIF', '.%s' % ext))
 
-        return destination
+        command = None
+        return destination, command
 
 
 
@@ -597,10 +610,11 @@ class DEMProject(RasterProject):
                 file.write('%d %d %d %d\n' % ((row['elevation']/feet_per_meter,) + row['color']))
 
         destination = self._new_dataset('tif', method='color_relief')
-        utils.shell('%s color-relief %s %s %s' % \
-            (self.gdaldem, source.path, colormap_filename, destination.path))
+        command = '%s color-relief %s %s %s' % \
+            (self.gdaldem, source.path, colormap_filename, destination.path)
 
-        # os.remove(colormap_filename)
-        return destination
+        utils.shell(command)
+
+        return destination, command
 
 
