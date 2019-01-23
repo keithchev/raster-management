@@ -100,31 +100,38 @@ class GeoTIFF(Dataset):
 
 class NED13Tile(Dataset):
 
-    def __init__(self, path, **kwargs):
+    def __init__(self, path, exists=False):
+        '''
+        Note that NED13 tile datasets are always raw;
+        that is, we cannot create them, only read them.
 
-        # NED13 tile datasets are always raw and must exist
-        # (since we never create these datasets, only read them)
-        super().__init__(path, is_raw=True, exists=True)
+        However, though we never create these datasets, they may not exist,
+        since we will sometimes deserialize an existing project 
+        that was generated from NED13 tiles on a now-disconnected external/remote drive
+        '''
+
+        super().__init__(path, is_raw=True, exists=exists)
 
         self.type = 'ned13'
 
         # the dataset name is the tile directory name
         self.name = self.path.split(os.sep)[-1]
 
-        # the adf file is always in the subdirectory beginning with 'grd'
-        subdir = [
-            s for s in glob.glob(os.path.join(self.path, 'grd*')) if os.path.isdir(s)]
+        # only attempt to find the .adf file if the dataset exists
+        if self.exists:
 
-        if len(subdir)!=1:
-            raise ValueError('No grdn subdir in %s' % self.path)
-        subdir = subdir[0]
+            # the adf file is always in the subdirectory beginning with 'grd'
+            subdir = [s for s in glob.glob(os.path.join(self.path, 'grd*')) if os.path.isdir(s)]
 
-        # the adf file itself always has the same name
-        self.adf_path = os.path.join(self.path, subdir, 'w001001.adf')
-        
-        # fingers crossed...
-        if not os.path.isfile(self.adf_path):
-            raise FileNotFoundError('%s does not exist' % self.adf_path)
+            if len(subdir)!=1:
+                raise ValueError('No grdn subdir in %s' % self.path)
+
+            # the adf file itself always has the same name
+            self.adf_path = os.path.join(self.path, subdir[0], 'w001001.adf')
+
+            # fingers crossed...
+            if not os.path.isfile(self.adf_path):
+                raise FileNotFoundError('%s does not exist' % self.adf_path)
 
 
     def bandpath(self, band=None):
@@ -178,9 +185,11 @@ class LandsatScene(Dataset):
                     band = result.groups()[0]
                     self._bandpaths[band] = bandpath
                 else:
-                    print('Warning: ignoring unexpected filename %s' % bandpath.split(os.sep)[-1])
+                    print('Warning: ignoring unexpected filename %s' % \
+                        bandpath.split(os.sep)[-1])
             
             self._validate()
+            self.bands = sorted(list(self._bandpaths.keys()))
 
     
     def _validate(self):
@@ -204,10 +213,6 @@ class LandsatScene(Dataset):
         if len(set(paths))!=1:
             raise ValueError('Filename roots are not consistent')
 
-
-    @property
-    def bands(self):
-        return sorted(list(self._bandpaths.keys()))
 
     
     def bandpath(self, band=None):
