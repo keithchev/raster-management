@@ -28,6 +28,7 @@ def shell(command=None, verbose=True):
 
 def current_commit():
 
+    # this is pretty hackish
     return shell('git log', verbose=False).split(' ')[1].split('\n')[0][:7]
 
 
@@ -38,7 +39,9 @@ def transform(bounds, dst_crs):
 
     bounds : a list of [lon_min, lat_min, lon_max, lat_max]
     dst_crs : a path to a geoTIFF whose crs the bounds will be transformed to
-    
+
+    TODO: it would be cleaner to use rasterio.warp.transform here instead of the CLI
+
     '''
     
     bounds = shell(

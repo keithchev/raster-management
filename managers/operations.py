@@ -21,9 +21,9 @@ class Operation(object):
 
     def __init__(self, source, destination, method=None, kwargs=None, commit=None):
 
-        # note: source is sometimes a single Dataset and sometimes a list of Datasets
+        # note: source is sometimes a single dataset and sometimes a list of datasets
         # for consistency, we force the internal _source and _destination attributes to lists
-        # but allow the public attributes to be either single Datasets or a list of Datasets
+        # but allow the public attributes to be either single datasets or a list of datasets
         if not isinstance(source, list):
             source = [source]
 

@@ -21,7 +21,7 @@ from .operations import Operation
 
 def log_operation(method):
 
-    def wrapper(self, source, **kwargs):
+    def wrapper(self, source, log=True, **kwargs):
 
         if isinstance(source, list):
             source = [s.destination if isinstance(s, Operation) else s for s in source]
@@ -30,6 +30,8 @@ def log_operation(method):
             source = source.destination
 
         destination = method(self, source, **kwargs)
+        if destination is None:
+            raise ValueError('method %s must return a dataset object' % method)
 
         operation = Operation(
             destination=destination,
@@ -39,7 +41,8 @@ def log_operation(method):
             commit=utils.current_commit()
         )
 
-        self.operations.append(operation)
+        if log:
+            self.operations.append(operation)
         # self.save_props()
 
     return wrapper
@@ -48,8 +51,9 @@ def log_operation(method):
 
 class RasterProject(object):
     
-    # path to rasterio CLI
+    # path to rasterio and gdal binaries
     _rio = settings.RIO_CLI
+    _gdal = settings.GDAL_CLI
 
     # hard-coded output options
     _opts = '--overwrite --driver GTiff --co tiled=false'
@@ -176,7 +180,7 @@ class RasterProject(object):
 
 
 
-    def get_operation(self, index, method=None):
+    def get_operation(self, which, method=None):
 
         ops = self.operations
 
@@ -186,15 +190,14 @@ class RasterProject(object):
                 print('No operations exist for method `%s`' % method)
                 return None
 
-        if index=='last':
+        if which=='last':
             return ops[-1]
             
-        if index=='first':
+        if which=='first':
             return ops[0]
 
-        if type(ind) is int:
-            return ops[ind]
-
+        if type(which) is int:
+            return ops[which]
 
 
     def _new_dataset(self, dataset_type=None, method=None):
@@ -208,8 +211,6 @@ class RasterProject(object):
         filename = '%s_%s_%s' % (self.project_name, method, timestamp)
         path = os.path.join(self.project_root, filename)
         return datasets.new_dataset(dataset_type, path, exists=False)
-
-
 
 
     @log_operation
@@ -269,7 +270,7 @@ class RasterProject(object):
     @log_operation
     def warp(self, source, crs=None, res=None):
         '''
-        Reproject and possible resample a tif dataset
+        Reproject and possibly resample a tif dataset
 
         Note that resampling must be 'cubic' to avoid grid-like artifacts
         in hillshading of un-downsampled NED13-based datasets
@@ -291,7 +292,7 @@ class RasterProject(object):
 
 
     @log_operation
-    def multiply(self, sources, gamma=None):
+    def multiply(self, sources, gamma=None, weight=None):
         '''
         Multiply an RGB tif by a black-and-white tif
 
@@ -299,6 +300,7 @@ class RasterProject(object):
         and the other is an RGB (color) tif
 
         '''
+
         images = []
         for source in sources:
             with rasterio.open(source.path) as src:
@@ -318,11 +320,14 @@ class RasterProject(object):
 
         # multiply-blend the BW image with the RGB image
         im_bw = utils.autogain_image(im_bw, percentile=100)
+        if weight:
+            im_bw *= weight
+
         im_rgb *= im_bw[:, :, None]
         im_rgb = utils.autogain_image(im_rgb, percentile=100)
 
         if gamma:
-            im_rgb **= .9
+            im_rgb **= gamma
 
         # hard-coded 'uint8' dtype for now
         dtype = 'uint8'
@@ -470,12 +475,10 @@ class DEMProject(RasterProject):
         # hackish way to determine whether the raw datasets are actually tifs instead of adfs
         # (note that if dataset_paths doesn't exist, self.raw_dataset_type 
         # will be overwritten during deserialization)
-        
         paths = kwargs.get('dataset_paths')
         if paths:
             if not isinstance(paths, list):
                 paths = [paths]
-
             try:
                 datasets.new_dataset('ned13', paths[0])
             except:
@@ -484,13 +487,81 @@ class DEMProject(RasterProject):
         print(self.raw_dataset_type)
         super().__init__(*args, **kwargs)
 
+        self.gdaldem = os.path.join(self._gdal, 'gdaldem')
+
 
     @log_operation
-    def hillshade(self, source):
+    def hill_shade(self, source):
 
-        destination = self._new_dataset('tif', method='hillshade')
-        utils.shell('gdaldem hillshade %s %s' % (source.path, destination.path))
+        destination = self._new_dataset('tif', method='hill_shade')
+        utils.shell('%s hillshade %s %s' % (self.gdaldem, source.path, destination.path))
         return destination
+
+
+    @log_operation
+    def slope_shade(self, source):
+        '''
+        slope shading
+        Note: no kwargs
+        '''
+
+        destination = self._new_dataset('tif', method='slope_shade')
+        slope_filepath = os.path.join(self._tmp_dir, 'temp.tif')
+        colormap_filename = os.path.join(self._tmp_dir, 'colormap.txt')
+
+        # calculate the slope angles
+        utils.shell('%s slope %s %s' % (self.gdaldem, source.path, slope_filepath))
+
+        with open(colormap_filename, 'w') as file:
+            for row in [(0, 255, 255, 255), (90, 0, 0, 0)]:
+                file.write('%d %d %d %d\n' % row)
+
+        # map the angles to uint8 values
+        utils.shell('%s color-relief %s %s %s' % \
+            (self.gdaldem, slope_filepath, colormap_filename, destination.path))
+
+        os.remove(slope_filepath)
+        return destination
+
+
+    @log_operation
+    def texture_shade(self, source, detail=None, enhancement=None):
+
+        texture_bin = os.path.join(settings.TEXTURE_SHADER, 'texture')
+        texture_image_bin = os.path.join(settings.TEXTURE_SHADER, 'texture_image')
+
+        if detail is None:
+            detail = .66
+
+        if enhancement is None:
+            enhancement = 2
+
+        flt_filepath = os.path.join(self._tmp_dir, 'temp.flt')
+        texture_filepath = os.path.join(self._tmp_dir, 'temp_texture.flt')
+        destination = self._new_dataset('tif', method='texture_shade')
+        
+        # texture shader requires the input DEM as an FLT file
+        gdal_translate = os.path.join(self._gdal, 'gdal_translate')
+        utils.shell('%s -of EHdr -ot Float32 %s %s' % (gdal_translate, source.path, flt_filepath))
+        
+        # create the texture intermediate
+        utils.shell(f'%s %f %s %s' % (texture_bin, detail, flt_filepath, texture_filepath))
+
+        # create the texture-shaded TIFF
+        utils.shell(f'%s %f %s %s' % (texture_image_bin, enhancement, texture_filepath, destination.path))
+        
+        # remove intermediate files
+        for ext in ['prj', 'hdr', 'flt.aux.xml', 'flt']:
+            os.remove(flt_filepath.replace('.flt', '.%s' % ext))
+        
+        for ext in ['flt', 'hdr', 'prj']:
+            os.remove(texture_filepath.replace('.flt', '.%s' % ext))
+        
+        for ext in ['tfw', 'prj']:
+            os.remove(destination.path.replace('.TIF', '.%s' % ext))
+
+        return destination
+
 
 
     @log_operation
@@ -526,9 +597,8 @@ class DEMProject(RasterProject):
                 file.write('%d %d %d %d\n' % ((row['elevation']/feet_per_meter,) + row['color']))
 
         destination = self._new_dataset('tif', method='color_relief')
-
-        utils.shell('gdaldem color-relief %s %s %s' % \
-            (source.path, colormap_filename, destination.path))
+        utils.shell('%s color-relief %s %s %s' % \
+            (self.gdaldem, source.path, colormap_filename, destination.path))
 
         # os.remove(colormap_filename)
         return destination
