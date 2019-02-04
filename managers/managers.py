@@ -141,7 +141,7 @@ class RasterProject(object):
             dataset_paths = [dataset_paths]
 
         raw_datasets = [
-            datasets.new_dataset(self.raw_dataset_type, path, is_raw=True, exists=True) 
+            datasets.new_dataset(self.raw_dataset_type, path, exists=True) 
             for path in dataset_paths]
 
         self.merge(raw_datasets, res=res, bounds=bounds)
@@ -294,7 +294,7 @@ class RasterProject(object):
 
 
     @log_operation
-    def multiply(self, sources, gamma=None, weight=None):
+    def multiply_rgb(self, sources, gamma=None, weight=None):
         '''
         Multiply an RGB tif by a black-and-white tif
 
@@ -487,7 +487,7 @@ class DEMProject(RasterProject):
             if not isinstance(paths, list):
                 paths = [paths]
             try:
-                datasets.new_dataset('ned13', paths[0])
+                datasets.new_dataset('ned13', paths[0], exists=True)
             except:
                 self.raw_dataset_type = 'tif'
 
@@ -563,14 +563,12 @@ class DEMProject(RasterProject):
         utils.shell(f'%s %f %s %s' % (texture_image_bin, enhancement, texture_filepath, destination.path))
         
         # remove intermediate files
-        for ext in ['prj', 'hdr', 'flt.aux.xml', 'flt']:
-            os.remove(flt_filepath.replace('.flt', '.%s' % ext))
-        
-        for ext in ['flt', 'hdr', 'prj']:
-            os.remove(texture_filepath.replace('.flt', '.%s' % ext))
-        
-        for ext in ['tfw', 'prj']:
-            os.remove(destination.path.replace('.TIF', '.%s' % ext))
+        for path in [flt_filepath, texture_filepath, destination.path]:
+            for ext in ['flt', 'hdr', 'prj', 'tfw', 'flt.aux.xml']:
+                try:
+                    os.remove(re.sub(r'(\w+)$', ext, path))
+                except FileNotFoundError:
+                    continue
 
         command = None
         return destination, command
