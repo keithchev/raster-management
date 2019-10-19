@@ -83,7 +83,7 @@ class RasterProject(object):
         # default raw dataset type is tiff
         # TODO: make a TIFFProject subclass of RasterProject
         # for single-channel TIFFs
-        self.raw_dataset_type = 'tif'
+        self.raw_dataset_type = self.raw_dataset_type or 'tif'
         
         # raw dataset type must be hard-coded in subclasses
         # assert hasattr(self, 'raw_dataset_type')
@@ -108,7 +108,7 @@ class RasterProject(object):
             if os.path.isdir(project_root):
                 shutil.rmtree(project_root)
             os.makedirs(project_root)
-            self._create_new_project(project_root, dataset_paths, res, bounds)
+            self._create_new_project(project_root, dataset_paths)
 
 
     def _load_existing_project(self, project_root, refresh):
@@ -127,7 +127,7 @@ class RasterProject(object):
             print(diff)
 
 
-    def _create_new_project(self, project_root, dataset_paths, res, bounds):
+    def _create_new_project(self, project_root, dataset_paths):
 
         self.operations = []
         self.project_root = re.sub(r'%s*$' % os.sep, '', project_root)
@@ -137,10 +137,10 @@ class RasterProject(object):
         if type(dataset_paths) is str:
             dataset_paths = [dataset_paths]
 
-        raw_datasets = [datasets.new_dataset(self.raw_dataset_type, path, exists=True) 
-            for path in dataset_paths]
-
-        self.merge(raw_datasets, res=res, bounds=bounds)
+        self.raw_datasets = [
+            datasets.new_dataset(self.raw_dataset_type, path, exists=True) 
+            for path in dataset_paths
+        ]
 
 
     def _serialize(self):
@@ -213,11 +213,15 @@ class RasterProject(object):
         '''
         Create the root dataset by merging and/or cropping the raw dataset(s).
 
-        Note that this method is the only way to create the root derived dataset;
-        that is, `source` should correspond to `dataset_paths` in __init__,
-        and the zeroth operation in self.operations should always correspond to this method.
+        Note that this method and the `warp` method are intended to be the only ways
+        to create the root derived dataset; that is, the first operation
+        in self.operations should always correspond to either the `merge` or `warp` methods.
         
-        For now, we don't enforce these conventions. 
+        Parameters
+        ----------
+        bounds : bounds of the merged dataset in lat/lon degrees
+        res: resolution, in units of the source crs
+
         '''
 
         assert isinstance(source, list)     
@@ -230,6 +234,11 @@ class RasterProject(object):
             output_dataset_type = self.raw_dataset_type
 
         destination = self._new_dataset(output_dataset_type, method='merge')
+
+        # transform lat/lon bounds to the source CRS
+        # (using the filepath to the first band of the first source)
+        bounds = utils.transform(bounds, source[0].bandpath(destination.expected_bands[0]))
+
         for band in destination.expected_bands:
     
             srs = [dataset.bandpath(band) for dataset in source]
@@ -244,11 +253,13 @@ class RasterProject(object):
                 
                 command += ['-r', str(_res)]
 
+            # note that we don't need double quotes around the bounds list,
+            # despite their appearance in the rio merge documentation
             if bounds:
-                command += ['--bounds', '"%s"' % bounds]
+                command += ['--bounds', '%s' % bounds]
 
             command += srs + dst
-            utils.run_command(command, verbose=False)
+            utils.run_command(command, verbose=True)
 
         return destination, command
 
@@ -262,23 +273,41 @@ class RasterProject(object):
 
 
     @log_operation
-    def warp(self, source, crs=None, res=None):
+    def warp(self, source, crs=None, res=None, bounds=None):
         '''
         Reproject and possibly resample a tif dataset
+
+        Parameters
+        ----------
+        crs : the CRS to which to reproject the dataset (e.g., 'EPSG:3857')
+        bounds : bounds of the reprojected dataset in lat/lon degrees
+        res: resolution, in units of the *destination* crs
 
         Note that resampling must be 'cubic' to avoid grid-like artifacts
         in hillshading of un-downsampled NED13-based datasets
 
         '''
 
+        bounds = utils.transform(bounds, crs)
+
+        if isinstance(source, list):
+            if len(source) > 1:
+                raise ValueError('Only one source dataset can be provided to warp')
+            source = source[0]
+
         if crs is None:
             raise ValueError('a crs must be provided')
 
         destination = self._new_dataset('tif', method='warp')
-        command = ['rio', 'warp', '--resampling', 'cubic', '--dst-crs', crs] + self._default_rio_args
+        command = ['rio', 'warp', '--resampling', 'lanczos', '--dst-crs', crs, '--dst-nodata', '0'] 
+        
+        command + self._default_rio_args
 
         if res:
             command += ['-r', str(res)]
+
+        if bounds:
+            command += ['--dst-bounds'] + list(map(str, bounds))
 
         command += [source.path, destination.path]
 

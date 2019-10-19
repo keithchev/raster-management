@@ -52,7 +52,7 @@ def transform(bounds, dst_crs):
     return json.loads(result.stdout)
 
 
-def autoscale(im, percentile=None, minn=None, maxx=None, dtype=None):
+def autoscale(im, percentile=None, minn=None, maxx=None, gamma=None, dtype=None):
     '''
     Autogain an image
 
@@ -78,6 +78,9 @@ def autoscale(im, percentile=None, minn=None, maxx=None, dtype=None):
     im /= (maxx - minn)
     im[im < 0] = 0
     im[im > 1] = 1
+
+    if gamma:
+        im = im**gamma
 
     if dtype is not None:
         im *= max_vals[dtype]

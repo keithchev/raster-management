@@ -164,7 +164,7 @@ class LandsatScene(Dataset):
         }
 
         self.pan_band = pan_bands[self.satellite]
-        self.expected_bands = set(map(str, bands[self.satellite]))
+        self.expected_bands = list(map(str, bands[self.satellite]))
 
         if self.exists:         
             if not os.path.isdir(self.path):
@@ -196,7 +196,7 @@ class LandsatScene(Dataset):
         
         # check for expected and unexpected bands
         existing_bands = set(self._bandpaths.keys())
-        missing_bands = self.expected_bands.difference(existing_bands)
+        missing_bands = set(self.expected_bands).difference(existing_bands)
         unexpected_bands = existing_bands.difference(self.expected_bands)
         
         if missing_bands:
