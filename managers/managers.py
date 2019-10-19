@@ -79,9 +79,14 @@ class RasterProject(object):
         TODO: clean up/simplify the initialization logic (_load_existing_project vs _create_new_project)
 
         '''
-
+        
+        # default raw dataset type is tiff
+        # TODO: make a TIFFProject subclass of RasterProject
+        # for single-channel TIFFs
+        self.raw_dataset_type = 'tif'
+        
         # raw dataset type must be hard-coded in subclasses
-        assert hasattr(self, 'raw_dataset_type')
+        # assert hasattr(self, 'raw_dataset_type')
 
         self.props_path = os.path.join(project_root, 'props.json')
 
@@ -103,9 +108,7 @@ class RasterProject(object):
             if os.path.isdir(project_root):
                 shutil.rmtree(project_root)
             os.makedirs(project_root)
-
             self._create_new_project(project_root, dataset_paths, res, bounds)
-
 
 
     def _load_existing_project(self, project_root, refresh):
@@ -119,11 +122,9 @@ class RasterProject(object):
         # check that the cached operations match the newly serialized operations
         new_props = self._serialize()
         diff = deepdiff.DeepDiff(cached_props, new_props, report_repetition=True)
-
         if diff:
             print('WARNING: cached serialized operations are not reproducible')
             print(diff)
-
 
 
     def _create_new_project(self, project_root, dataset_paths, res, bounds):
@@ -136,12 +137,10 @@ class RasterProject(object):
         if type(dataset_paths) is str:
             dataset_paths = [dataset_paths]
 
-        raw_datasets = [
-            datasets.new_dataset(self.raw_dataset_type, path, exists=True) 
+        raw_datasets = [datasets.new_dataset(self.raw_dataset_type, path, exists=True) 
             for path in dataset_paths]
 
         self.merge(raw_datasets, res=res, bounds=bounds)
-
 
 
     def _serialize(self):
@@ -177,24 +176,23 @@ class RasterProject(object):
 
 
 
-    def get_operation(self, which, method=None):
+    def get_operation(self, index, method=None):
 
         ops = self.operations
-
         if method:
             ops = [op for op in ops if op.method==method]
             if not ops:
                 print('No operations exist for method `%s`' % method)
                 return None
 
-        if which=='last':
+        if index=='last':
             return ops[-1]
-            
-        if which=='first':
+        elif index=='first':
             return ops[0]
-
-        if type(which) is int:
-            return ops[which]
+        elif type(index) is int:
+            return ops[index]
+        else:
+            raise ValueError('%s is not a valid index value' % index)
 
 
     def _new_dataset(self, dataset_type=None, method=None):
