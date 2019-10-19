@@ -52,12 +52,8 @@ def log_operation(method):
 
 class RasterProject(object):
     
-    # path to rasterio and gdal binaries
-    _rio = settings.RIO_CLI
-    _gdal = settings.GDAL_CLI
-
     # hard-coded output options
-    _opts = '--overwrite --driver GTiff --co tiled=false'
+    _default_rio_args = ['--overwrite', '--driver', 'GTiff', '--co', 'tiled=false']
 
     # temp dir
     _tmp_dir = os.path.join(os.getenv('HOME'), 'tmp')
@@ -236,26 +232,25 @@ class RasterProject(object):
             output_dataset_type = self.raw_dataset_type
 
         destination = self._new_dataset(output_dataset_type, method='merge')
-
         for band in destination.expected_bands:
     
-            srs = ' '.join([dataset.bandpath(band) for dataset in source])
-            dst = destination.bandpath(band)
+            srs = [dataset.bandpath(band) for dataset in source]
+            dst = [destination.bandpath(band)]
 
-            command = '%s merge %s' % (self._rio, self._opts)
+            command = ['rio', 'merge'] + self._default_rio_args
 
             if res:
                 _res = res
                 if destination.pan_band and destination.pan_band==band:
                     _res = res/2
                 
-                command += ' -r %s' % _res
+                command += ['-r', str(_res)]
 
             if bounds:
-                command += ' --bounds "%s"' % bounds
+                command += ['--bounds', '"%s"' % bounds]
 
-            command += ' %s %s' % (srs, dst)
-            utils.shell(command, verbose=False)
+            command += srs + dst
+            utils.run_command(command, verbose=False)
 
         return destination, command
 
@@ -282,14 +277,14 @@ class RasterProject(object):
             raise ValueError('a crs must be provided')
 
         destination = self._new_dataset('tif', method='warp')
-        command = '%s warp %s --resampling cubic --dst-crs %s' % (self._rio, self._opts, crs)
+        command = ['rio', 'warp', '--resampling', 'cubic', '--dst-crs', crs] + self._default_rio_args
 
         if res:
-            command += ' -r %s' % res
+            command += ['-r', str(res)]
 
-        command += ' %s %s' % (source.path, destination.path)
+        command += [source.path, destination.path]
 
-        utils.shell(command)
+        utils.run_command(command)
         return destination, command
 
 
@@ -321,12 +316,12 @@ class RasterProject(object):
         im_rgb = np.swapaxes(im_rgb, 1, 2)
 
         # multiply-blend the BW image with the RGB image
-        im_bw = utils.autogain_image(im_bw, percentile=100)
+        im_bw = utils.autoscale(im_bw, percentile=100)
         if weight:
             im_bw *= weight
 
         im_rgb *= im_bw[:, :, None]
-        im_rgb = utils.autogain_image(im_rgb, percentile=100)
+        im_rgb = utils.autoscale(im_rgb, percentile=100)
 
         if gamma:
             im_rgb **= gamma
@@ -419,10 +414,10 @@ class LandsatProject(RasterProject):
         bands = list(map(str, bands))
         destination = self._new_dataset('tif', method='stack')
 
-        command = '%s stack --overwrite --rgb %s %s' % \
-              (self._rio, ' '.join([source.bandpath(b) for b in bands]), destination.path)
+        command = ['rio', 'stack', '--overwrite', '--rgb']
+        command += [source.bandpath(b) for b in bands] + [destination.path]
 
-        utils.shell(command)
+        utils.run_command(command)
         return destination, command
 
 
@@ -458,10 +453,10 @@ class LandsatProject(RasterProject):
                     im_dst = np.zeros((len(src.indexes),) + src.shape)
                     for ind, band in enumerate(src.indexes):
                         im = src.read(band).astype('float64')
-                        im_dst[ind, :, :] = utils.autogain_image(im, percentile)
+                        im_dst[ind, :, :] = utils.autoscale(im, percentile)
                 else:
                     im = src.read().astype('float64')
-                    im_dst = utils.autogain_image(im, percentile)
+                    im_dst = utils.autoscale(im, percentile)
 
                 im_dst *= dtype_max
                 im_dst = im_dst.astype(dtype)
@@ -494,15 +489,13 @@ class DEMProject(RasterProject):
         print(self.raw_dataset_type)
         super().__init__(*args, **kwargs)
 
-        self.gdaldem = os.path.join(self._gdal, 'gdaldem')
-
 
     @log_operation
     def hill_shade(self, source):
 
         destination = self._new_dataset('tif', method='hill_shade')
-        command = '%s hillshade %s %s' % (self.gdaldem, source.path, destination.path)
-        utils.shell(command)
+        command = ['gdaldem', 'hillshade', source.path, destination.path]
+        utils.run_command(command)
 
         return destination, command
 
@@ -519,15 +512,14 @@ class DEMProject(RasterProject):
         colormap_filename = os.path.join(self._tmp_dir, 'colormap.txt')
 
         # calculate the slope angles
-        utils.shell('%s slope %s %s' % (self.gdaldem, source.path, slope_filepath))
+        utils.run_command(['gdaldem', 'slope', source.path, slope_filepath])
 
         with open(colormap_filename, 'w') as file:
             for row in [(0, 255, 255, 255), (90, 0, 0, 0)]:
                 file.write('%d %d %d %d\n' % row)
 
         # map the angles to uint8 values
-        utils.shell('%s color-relief %s %s %s' % \
-            (self.gdaldem, slope_filepath, colormap_filename, destination.path))
+        utils.run_command(['gdaldem', 'color-relief', slope_filepath, colormap_filename, destination.path])
 
         os.remove(slope_filepath)
 
@@ -539,8 +531,8 @@ class DEMProject(RasterProject):
     @log_operation
     def texture_shade(self, source, detail=None, enhancement=None):
 
-        texture_bin = os.path.join(settings.TEXTURE_SHADER, 'texture')
-        texture_image_bin = os.path.join(settings.TEXTURE_SHADER, 'texture_image')
+        texture_bin = os.path.join(settings.TEXTURE_SHADER_PATH, 'texture')
+        texture_image_bin = os.path.join(settings.TEXTURE_SHADER_PATH, 'texture_image')
 
         if detail is None:
             detail = .66
@@ -553,14 +545,13 @@ class DEMProject(RasterProject):
         destination = self._new_dataset('tif', method='texture_shade')
         
         # texture shader requires the input DEM as an FLT file
-        gdal_translate = os.path.join(self._gdal, 'gdal_translate')
-        utils.shell('%s -of EHdr -ot Float32 %s %s' % (gdal_translate, source.path, flt_filepath))
+        utils.run_command(['gdal_translate', '-of', 'EHdr', '-ot', 'Float32', source.path, flt_filepath])
         
         # create the texture intermediate
-        utils.shell(f'%s %f %s %s' % (texture_bin, detail, flt_filepath, texture_filepath))
+        utils.run_command([texture_bin, str(detail), flt_filepath, texture_filepath])
 
         # create the texture-shaded TIFF
-        utils.shell(f'%s %f %s %s' % (texture_image_bin, enhancement, texture_filepath, destination.path))
+        utils.run_command([texture_image_bin, str(enhancement), texture_filepath, destination.path])
         
         # remove intermediate files
         for path in [flt_filepath, texture_filepath, destination.path]:
@@ -608,10 +599,8 @@ class DEMProject(RasterProject):
                 file.write('%d %d %d %d\n' % ((row['elevation']/feet_per_meter,) + row['color']))
 
         destination = self._new_dataset('tif', method='color_relief')
-        command = '%s color-relief %s %s %s' % \
-            (self.gdaldem, source.path, colormap_filename, destination.path)
-
-        utils.shell(command)
+        command = ['gdaldem', 'color-relief', source.path, colormap_filename, destination.path]
+        utils.run_command(command)
 
         return destination, command
 

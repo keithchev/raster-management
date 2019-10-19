@@ -8,29 +8,27 @@ import numpy as np
 from . import settings
 
 
-def shell(command=None, verbose=True):
+def run_command(command=None, verbose=True):
 
-    output = subprocess.run(
+    result = subprocess.run(
         command, 
-        shell=True, 
+        stdin=subprocess.PIPE, 
+        stderr=subprocess.PIPE, 
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True)
+        env=dict(PATH=settings.PATH, PROJ_LIB='/home/keith/anaconda3/envs/rasmanenv/share/proj'))
 
     if verbose:
-        if output.stderr:
-            print(output.stderr)
-        if output.stdout:
-            print(output.stdout)
+        if result.stderr:
+            print(result.stderr)
+        if result.stdout:
+            print(result.stdout)
             
-    return output.stdout
+    return result
 
 
 def current_commit():
-
-    # this is pretty hackish
-    return shell('git log', verbose=False).split(' ')[1].split('\n')[0][:7]
-
+    # TODO: reimplement this using gitpython
+    return ''
 
 
 def transform(bounds, dst_crs):
@@ -44,14 +42,17 @@ def transform(bounds, dst_crs):
 
     '''
     
-    bounds = shell(
-        f'echo "{bounds}" | {settings.RIO_CLI} transform - --dst-crs {dst_crs} --precision 2',
+    result = run_command(
+        ['rio', 'transform', '--dst-crs', dst_crs, '--precision', '2', f'{bounds}'], 
         verbose=False)
 
-    return json.loads(bounds)
+    if result.stderr:
+        raise Exception('Rio error: %s' % result.stderr)
+
+    return json.loads(result.stdout)
 
 
-def autogain_image(im, percentile=None):
+def autoscale(im, percentile=None, minn=None, maxx=None, dtype=None):
     '''
     Autogain an image
 
@@ -60,16 +61,26 @@ def autogain_image(im, percentile=None):
        
     '''
     
+    max_vals = {'uint8': 255, 'uint16': 65535}
     im = im.astype(float)
 
     # default to min/max
     if percentile is None:
         percentile = 100
+    pmin, pmax = np.percentile(im[:], [100 - percentile, percentile])
 
-    minn, maxx = np.percentile(im[:], [100 - percentile, percentile])
+    if minn is None:
+        minn = pmin
+    if maxx is None:
+        maxx = pmax
 
     im -= minn
     im /= (maxx - minn)
     im[im < 0] = 0
     im[im > 1] = 1
+
+    if dtype is not None:
+        im *= max_vals[dtype]
+        im = im.astype(dtype)
+
     return im
