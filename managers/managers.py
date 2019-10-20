@@ -66,7 +66,13 @@ class RasterProject(object):
     ]
 
 
-    def __init__(self, project_root, dataset_paths=None, res=None, bounds=None, reset=False, refresh=False):
+    def __init__(
+        self, 
+        project_root,
+        dataset_paths=None,
+        raw_dataset_type=None, 
+        reset=False, 
+        refresh=False):
         '''
         project_root:  path to the project directory
         dataset_paths: a list of paths to the raw/initial data files
@@ -80,21 +86,14 @@ class RasterProject(object):
 
         '''
         
-        # default raw dataset type is tiff
-        # TODO: make a TIFFProject subclass of RasterProject
-        # for single-channel TIFFs
-        self.raw_dataset_type = self.raw_dataset_type or 'tif'
-        
         # raw dataset type must be hard-coded in subclasses
-        # assert hasattr(self, 'raw_dataset_type')
+        self.raw_dataset_type = raw_dataset_type
 
         self.props_path = os.path.join(project_root, 'props.json')
 
         if not reset:
             if not os.path.exists(self.props_path):
                 raise FileNotFoundError('No cached props found at %s' % self.props_path)
-            if res is not None or bounds is not None:
-                print('Warning: res and bounds are ignored when loading an existing dataset')
 
             print('Loading from existing project')
             self._load_existing_project(project_root, refresh)
@@ -227,38 +226,33 @@ class RasterProject(object):
         assert isinstance(source, list)     
         for dataset in source:
             assert(dataset.type==self.raw_dataset_type)   
-        
+    
+        output_dataset_type = self.raw_dataset_type
         if self.raw_dataset_type=='ned13':
             output_dataset_type = 'tif'
-        else:
-            output_dataset_type = self.raw_dataset_type
 
         destination = self._new_dataset(output_dataset_type, method='merge')
 
         # transform lat/lon bounds to the source CRS
         # (using the filepath to the first band of the first source)
-        bounds = utils.transform(bounds, source[0].bandpath(destination.expected_bands[0]))
+        if bounds:
+            bounds = utils.transform(bounds, source[0].bandpath(destination.expected_bands[0]))
 
         for band in destination.expected_bands:
     
-            srs = [dataset.bandpath(band) for dataset in source]
-            dst = [destination.bandpath(band)]
-
-            command = ['rio', 'merge'] + self._default_rio_args
+            src_filepaths = [dataset.bandpath(band) for dataset in source]
+            dst_filepath = destination.bandpath(band)
 
             if res:
                 _res = res
                 if destination.pan_band and destination.pan_band==band:
                     _res = res/2
                 
-                command += ['-r', str(_res)]
+            command = utils.construct_rio_command(
+                'merge', src_filepaths, dst_filepath,
+                bounds=bounds,
+                res=_res)
 
-            # note that we don't need double quotes around the bounds list,
-            # despite their appearance in the rio merge documentation
-            if bounds:
-                command += ['--bounds', '%s' % bounds]
-
-            command += srs + dst
             utils.run_command(command, verbose=True)
 
         return destination, command
@@ -288,8 +282,7 @@ class RasterProject(object):
 
         '''
 
-        bounds = utils.transform(bounds, crs)
-
+        
         if isinstance(source, list):
             if len(source) > 1:
                 raise ValueError('Only one source dataset can be provided to warp')
@@ -299,17 +292,18 @@ class RasterProject(object):
             raise ValueError('a crs must be provided')
 
         destination = self._new_dataset('tif', method='warp')
-        command = ['rio', 'warp', '--resampling', 'lanczos', '--dst-crs', crs, '--dst-nodata', '0'] 
-        
-        command + self._default_rio_args
 
-        if res:
-            command += ['-r', str(res)]
-
+        # transform bounds from lat/lon to the destination CRS        
         if bounds:
-            command += ['--dst-bounds'] + list(map(str, bounds))
+            bounds = utils.transform(bounds, crs)
 
-        command += [source.path, destination.path]
+        command = utils.construct_rio_command(
+            'warp', source.path, destination.path,
+            dst_crs=crs,
+            dst_nodata=0,
+            dst_bounds=bounds,
+            resampling='lanczos',
+            res=res)
 
         utils.run_command(command)
         return destination, command
@@ -398,11 +392,12 @@ class RasterProject(object):
 
         '''
 
-        # the first operation must be a merge
+        # the first operation must be a merge or a warp
         operation = self.operations[0]
-        assert(operation.method=='merge')
+        assert(operation.method in ['merge', 'warp'])
 
-        res, bounds = operation.kwargs['res'], operation.kwargs['bounds']
+        res = operation.kwargs.get('res')
+        bounds = operation.kwargs.get('bounds')
 
         with rasterio.open(operation.destination.bandpath(1)) as src:
 
@@ -410,25 +405,25 @@ class RasterProject(object):
             tolerance = max(src.res)*2
 
             if res is not None and set(src.res)!=set([res]):
-                raise ValueError(
-                    'The resolution of the existing root dataset is %s but a resolution of %s was provided' % \
+                print('Warning: the resolution of the existing root dataset is %s but a resolution of %s was provided' % \
                         (src.res, res))
 
             if bounds is not None and np.any(np.abs(np.array(src.bounds) - bounds) > tolerance):
-                raise ValueError(
-                    'The bounds of the existing root dataset are %s but bounds of %s were provided' % \
+                print('Warning: the bounds of the existing root dataset are %s but bounds of %s were provided' % \
                         (tuple(src.bounds), bounds))
 
             print('Found root dataset with res=%s and bounds=%s' % (src.res, tuple(src.bounds)))    
 
 
+class GOESProject(RasterProject):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, raw_dataset_type='tif', **kwargs)
+
 
 class LandsatProject(RasterProject):
 
     def __init__(self, *args, **kwargs):
-        
-        self.raw_dataset_type = 'landsat'
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, raw_dataset_type='landsat', **kwargs)
 
 
     @log_operation
@@ -499,7 +494,7 @@ class DEMProject(RasterProject):
     def __init__(self, *args, **kwargs):
 
         # assume raw NED13 tiles to start (i.e., .adf files)
-        self.raw_dataset_type = 'ned13'
+        raw_dataset_type = 'ned13'
 
         # hackish way to determine whether the raw datasets are actually tifs instead of adfs
         # (note that if dataset_paths doesn't exist, self.raw_dataset_type 
@@ -511,10 +506,10 @@ class DEMProject(RasterProject):
             try:
                 datasets.new_dataset('ned13', paths[0], exists=True)
             except:
-                self.raw_dataset_type = 'tif'
+                raw_dataset_type = 'tif'
 
-        print(self.raw_dataset_type)
-        super().__init__(*args, **kwargs)
+        print(raw_dataset_type)
+        super().__init__(*args, raw_dataset_type=raw_dataset_type, **kwargs)
 
 
     @log_operation
