@@ -14,6 +14,7 @@ def new_dataset(dataset_type, path, **kwargs):
         'landsat': 'LandsatScene',
         'ned13': 'NED13Tile',
         'tif': 'GeoTIFF',
+        'goes16': 'GOES16Scene'
     }
 
     if dataset_type not in dataset_types:
@@ -50,16 +51,12 @@ class Dataset(object):
         self.exists = exists
 
         # the bands we expect the dataset to have
-        # (only not [None] for Landsat datasets)
-        self.expected_bands = [None]
+        # ([0] for band-less datasets like GeoTIFF and NED13Tile))
+        self.expected_bands = [0]
 
-        # placeholder for the single 'band' of non-Landsat datasets
-        # (for consistency with Landsat dataset API)
-        self.bands = [None]
-
-        # the panchromatic band (for Landsat datasets only)
-        self.pan_band = None
-
+        # the relative resolution of each band
+        # (for Landsat panchromatic band and GOESR bands)
+        self.rel_band_res = {}
 
 
 class GeoTIFF(Dataset):
@@ -88,11 +85,11 @@ class GeoTIFF(Dataset):
                 raise FileNotFoundError('%s does not exist' % self.path)
 
 
-    def bandpath(self, band=None):
+    def filepath(self, band=None):
         '''
         For TIFF files, there is only one 'band' (the TIFF file),
         and the path to it is the same as self.path
-        (band=None ensures consistency with LandsatScene.bandpath)
+        (band=None ensures consistency with LandsatScene.filepath)
         '''
         return self.path
 
@@ -134,7 +131,7 @@ class NED13Tile(Dataset):
                 raise FileNotFoundError('%s does not exist' % self.adf_path)
 
 
-    def bandpath(self, band=None):
+    def filepath(self, band=None):
         return self.adf_path
 
 
@@ -148,56 +145,56 @@ class LandsatScene(Dataset):
         # satellite type: 'L8', 'L7', or 'L5'
         if satellite is None:
             satellite = 'L8'
-
         self.satellite = satellite
 
-        bands = {
+        expected_bands = {
             'L8': range(1, 12),
             'L7': range(1, 9),
             'L5': range(1, 8),
         }
 
-        pan_bands = {
-            'L8': '8',
-            'L7': '7',
+        pan_band = {
+            'L8': 8,
+            'L7': 7,
             'L5': None,
         }
 
-        self.pan_band = pan_bands[self.satellite]
-        self.expected_bands = list(map(str, bands[self.satellite]))
+        self.expected_bands = expected_bands[self.satellite]
 
-        if self.exists:         
-            if not os.path.isdir(self.path):
-                raise FileNotFoundError('%s is not a directory' % self.path)
-        else:
-            os.makedirs(self.path, exist_ok=True)
+        # set the relative res for the pan band
+        pan_band = pan_band.get(self.satellite)
+        if pan_band is not None:
+            self.rel_band_res[pan_band] = .5
+
+        if self.exists and not os.path.isdir(self.path):
+            raise FileNotFoundError('%s is not a directory' % self.path)
+        os.makedirs(self.path, exist_ok=True)
 
         # the dataset name is the directory name
         self.name = os.path.split(self.path)[-1]
         
-        # find the filename for each band
-        self._bandpaths = {}
+        # find the existing bands
+        self.extant_bands = []
         if self.exists:    
-            bandpaths = glob.glob(os.path.join(self.path, '*.TIF'))
-            for bandpath in bandpaths:
-                result = re.search('_B([0-9]+).TIF$', bandpath)
+            filepaths = glob.glob(os.path.join(self.path, '*.TIF'))
+            for filepath in filepaths:
+                result = re.search('%s_B([0-9]+).TIF$' % self.name, filepath)
                 if result:
-                    band = result.groups()[0]
-                    self._bandpaths[band] = bandpath
+                    band = int(result.groups()[0])
+                    self.extant_bands.append(band)
                 else:
                     print('Warning: ignoring unexpected filename %s' % \
-                        bandpath.split(os.sep)[-1])
-            
+                        filepath.split(os.sep)[-1])
+ 
             self._validate()
-            self.bands = sorted(list(self._bandpaths.keys()))
+            self.extant_bands = sorted(self.extant_bands)
 
     
     def _validate(self):
         
-        # check for expected and unexpected bands
-        existing_bands = set(self._bandpaths.keys())
-        missing_bands = set(self.expected_bands).difference(existing_bands)
-        unexpected_bands = existing_bands.difference(self.expected_bands)
+        # check for expected and unexpected bands)
+        missing_bands = set(self.expected_bands).difference(self.extant_bands)
+        unexpected_bands = set(self.extant_bands).difference(self.expected_bands)
         
         if missing_bands:
             print('Warning: expected bands %s were not found' % \
@@ -207,27 +204,39 @@ class LandsatScene(Dataset):
             print('Warning: found unexpected bands: %s' % \
                   sorted(list(unexpected_bands)))
 
-        # verify that filenames are consistent
-        paths = [path.replace('_B%s.TIF' % band, '') for band, path in self._bandpaths.items()]
-            
-        if len(set(paths))!=1:
-            raise ValueError('Filename roots are not consistent')
 
-
-    
-    def bandpath(self, band=None):
+    def filepath(self, band=None):
         
         if band is None:
             raise ValueError('A band must be provided')
 
-        if type(band) is int:
-            band = str(band)
+        filepath = os.path.join(self.path, '%s_B%s.TIF' % (self.name, band))    
+        if self.exists and not os.path.isfile(filepath):
+            raise FileNotFoundError('B%s does not exist for scene %s' % (band, self.name))
+        return filepath
+
+
+
+class GOES16Scene(Dataset):
+    '''
     
-        if self.exists:
-            bandpath = self._bandpaths.get(band)
-            if bandpath is None:
-                raise FileNotFoundError('B%s does not exist for scene %s' % (band, self.name))
-        else:
-            bandpath = os.path.join(self.path, '%s_B%s.TIF' % (self.name, band))
-            
-        return bandpath
+    Filename convention for GOES ABI L1b data
+    (see https://www.goes-r.gov/users/docs/PUG-L1b-vol3.pdf)
+
+    Example filename
+    OR_ABI-L1b-RadC-M6C03_G17_s20192431401196_e20192431403569_c20192431404008.nc
+
+    OR       Operational real-time data
+    ABI-L1b  Advanced Baseline Imager Level 1b
+    Rad      ABI radiances
+    C        Image type ('C' CONUS, 'M' Mesoscale, 'F' Full Disk)
+    M6       Scan mode (M3, M4, or M6)
+    C03      Band number
+    G17      GOES-17
+
+    Timestamps (4 digit year, 3 digit day of year, hour, minute, second, tenth second)
+    sYYYYJJJHHMMSSZ - Scan start
+    eYYYYJJJHHMMSSZ - Scan end
+    cYYYYJJJHHMMSSZ - File creation
+
+    '''

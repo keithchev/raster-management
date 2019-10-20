@@ -222,7 +222,7 @@ class RasterProject(object):
 
         assert isinstance(source, list)     
         for dataset in source:
-            assert(dataset.type==self.raw_dataset_type)   
+            assert(dataset.type==self.raw_dataset_type)
     
         output_dataset_type = self.raw_dataset_type
         if self.raw_dataset_type=='ned13':
@@ -233,22 +233,25 @@ class RasterProject(object):
         # transform lat/lon bounds to the source CRS
         # (using the filepath to the first band of the first source)
         if bounds:
-            bounds = utils.transform(bounds, source[0].bandpath(destination.expected_bands[0]))
+            bounds = utils.transform(bounds, source[0].filepath(destination.expected_bands[0]))
 
         for band in destination.expected_bands:
-    
-            src_filepaths = [dataset.bandpath(band) for dataset in source]
-            dst_filepath = destination.bandpath(band)
 
-            if res:
-                _res = res
-                if destination.pan_band and destination.pan_band==band:
-                    _res = res/2
-                
+            src_filepaths = [dataset.filepath(band) for dataset in source]
+            dst_filepath = destination.filepath(band)
+
+            # if we are resampling, maintain the right relative resolution
+            # (e.g., for a Landsat dataset and res = 100, 
+            # we should use res = 50 for the pan band)
+            final_res = res
+            rel_res = destination.rel_band_res.get(band)
+            if res and rel_res:
+                final_res *= rel_res
+
             command = utils.construct_rio_command(
                 'merge', src_filepaths, dst_filepath,
                 bounds=bounds,
-                res=_res)
+                res=final_res)
 
             utils.run_command(command, verbose=True)
 
@@ -396,7 +399,7 @@ class RasterProject(object):
         res = operation.kwargs.get('res')
         bounds = operation.kwargs.get('bounds')
 
-        with rasterio.open(operation.destination.bandpath(1)) as src:
+        with rasterio.open(operation.destination.filepath(1)) as src:
 
             # tolerance for comparing actual to expected bounds
             tolerance = max(src.res)*2
@@ -432,7 +435,7 @@ class LandsatProject(RasterProject):
 
         bands = list(map(str, bands))
         destination = self._new_dataset('tif', method='stack')
-        src_filepaths = [source.bandpath(b) for b in bands]
+        src_filepaths = [source.filepath(band) for band in bands]
 
         command = utils.construct_rio_command(
             'stack',
