@@ -52,9 +52,6 @@ def log_operation(method):
 
 class RasterProject(object):
     
-    # hard-coded output options
-    _default_rio_args = ['--overwrite', '--driver', 'GTiff', '--co', 'tiled=false']
-
     # temp dir
     _tmp_dir = os.path.join(os.getenv('HOME'), 'tmp')
 
@@ -435,9 +432,14 @@ class LandsatProject(RasterProject):
 
         bands = list(map(str, bands))
         destination = self._new_dataset('tif', method='stack')
+        src_filepaths = [source.bandpath(b) for b in bands]
 
-        command = ['rio', 'stack', '--overwrite', '--rgb']
-        command += [source.bandpath(b) for b in bands] + [destination.path]
+        command = utils.construct_rio_command(
+            'stack',
+            src_filepaths,
+            destination.path,
+            overwrite=True,
+            rgb=True)
 
         utils.run_command(command)
         return destination, command

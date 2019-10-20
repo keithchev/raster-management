@@ -25,7 +25,7 @@ def construct_rio_command(command, inputs, output, **kwargs):
         'overwrite': True
     }
     
-    if command not in ['transform', 'info']:
+    if command in ['warp', 'merge', 'rasterize']:
         kwargs.update(default_output_options)
 
     valid_commands = [
@@ -40,7 +40,6 @@ def construct_rio_command(command, inputs, output, **kwargs):
 
     # append the kwargs
     for kwarg, value in kwargs.items():
-        
         if value is None:
             continue
         
@@ -85,7 +84,7 @@ def run_command(command=None, verbose=True):
         stdin=subprocess.PIPE, 
         stderr=subprocess.PIPE, 
         stdout=subprocess.PIPE,
-        env=dict(PATH=settings.PATH, PROJ_LIB='/home/keith/anaconda3/envs/rasmanenv/share/proj'))
+        env=settings.RIO_ENV)
 
     if verbose:
         if result.stderr:
@@ -103,10 +102,11 @@ def current_commit():
 
 def transform(bounds, dst_crs):
     '''
-    Transform EPSG:4326 lat/lon bounds to a given crs
+    Transform EPSG:4326 lat/lon bounds to a given CRS
 
     bounds : a list of [lon_min, lat_min, lon_max, lat_max]
-    dst_crs : a path to a geoTIFF whose crs the bounds will be transformed to
+    dst_crs : either a CRS like 'EPSG:3857' 
+        or a path to a geoTIFF to whose CRS the bounds will be transformed
 
     TODO: it would be cleaner to use rasterio.warp.transform here instead of the CLI
 
