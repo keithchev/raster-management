@@ -1,16 +1,16 @@
 channels:
   - defaults
   - conda-forge
-dependencies:
 
+dependencies:
   - python>=3.6.7
   - rasterio>=1.0.28
   - ipykernel
-  - seaborn
+  - xarray
 
   - pip:
     - matplotlib
     - tifffile
     - deepdiff
     - gitpython
-
+    - netcdf4
