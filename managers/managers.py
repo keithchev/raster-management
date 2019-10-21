@@ -291,21 +291,31 @@ class RasterProject(object):
         if crs is None:
             raise ValueError('a crs must be provided')
 
-        destination = self._new_dataset('tif', method='warp')
+        destination = self._new_dataset(source.type, method='warp')
 
         # transform bounds from lat/lon to the destination CRS        
         if bounds:
             bounds = utils.transform(bounds, crs)
 
-        command = utils.construct_rio_command(
-            'warp', source.path, destination.path,
-            dst_crs=crs,
-            dst_nodata=0,
-            dst_bounds=bounds,
-            resampling='lanczos',
-            res=res)
+        for band in source.extant_bands:
+            src_filepath = source.filepath(band)
+            dst_filepath = destination.filepath(band)
 
-        utils.run_command(command)
+            # if we are resampling, maintain the right relative resolution
+            final_res = res
+            rel_res = destination.rel_band_res.get(band)
+            if res and rel_res:
+                final_res *= rel_res
+
+            command = utils.construct_rio_command(
+                'warp', src_filepath, dst_filepath,
+                dst_crs=crs,
+                dst_nodata=0,
+                dst_bounds=bounds,
+                resampling='lanczos',
+                res=res)
+
+            utils.run_command(command)
         return destination, command
 
 
@@ -417,7 +427,7 @@ class RasterProject(object):
 
 class GOESProject(RasterProject):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, raw_dataset_type='tif', **kwargs)
+        super().__init__(*args, raw_dataset_type='goes', **kwargs)
 
 
 class LandsatProject(RasterProject):

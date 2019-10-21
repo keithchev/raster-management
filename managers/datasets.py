@@ -14,7 +14,7 @@ def new_dataset(dataset_type, path, **kwargs):
         'landsat': 'LandsatScene',
         'ned13': 'NED13Tile',
         'tif': 'GeoTIFF',
-        'goes16': 'GOES16Scene'
+        'goes': 'GOESScene'
     }
 
     if dataset_type not in dataset_types:
@@ -217,9 +217,8 @@ class LandsatScene(Dataset):
 
 
 
-class GOES16Scene(Dataset):
+class GOESScene(Dataset):
     '''
-    
     Filename convention for GOES ABI L1b data
     (see https://www.goes-r.gov/users/docs/PUG-L1b-vol3.pdf)
 
@@ -239,4 +238,59 @@ class GOES16Scene(Dataset):
     eYYYYJJJHHMMSSZ - Scan end
     cYYYYJJJHHMMSSZ - File creation
 
+    Band details (for visible and near-IR bands only)
+    -------------------------------------------------
+    Band  Res (km)   Wavelength   Spectrum   Name
+    01	  1          0.47µm	    Visible	    Blue
+    02	  0.5        0.64µm	    Visible	    Red
+    03	  1	        0.86µm	    Near-IR	    Veggie
+    04	  2	        1.37µm	    Near-IR	    Cirrus
+    05	  1	        1.60µm	    Near-IR	    Snow/Ice
+    06	  2	        2.24µm	    Near-IR	    Cloud PArticle Size
+
     '''
+
+    def __init__(self, path, **kwargs):
+        super().__init__(path, **kwargs)
+
+        self.type = 'goes'
+
+        if self.exists and not os.path.isdir(self.path):
+            raise FileNotFoundError('%s is not a directory' % self.path)
+        os.makedirs(self.path, exist_ok=True)
+
+        # the dataset name is the directory name
+        self.name = os.path.split(self.path)[-1]
+
+        # find existing bands
+        # note that not all bands may be present (or need to be)
+        self.filepaths = {}
+        self.extant_bands = []
+        if self.exists:    
+            filepaths = glob.glob(os.path.join(self.path, '*.nc.tif'))
+            for filepath in filepaths:
+                filename = filepath.split(os.sep)[-1]
+                result = re.search('OR_ABI-L1b-RadC-M6C0([0-9])', filename)
+                if result:
+                    band = int(result.groups()[0])
+                    self.extant_bands.append(band)
+                    self.filepaths[band] = filepath
+                else:
+                    print('Warning: ignoring unexpected filename %s' % \
+                        filepath.split(os.sep)[-1])
+ 
+            self.extant_bands = sorted(self.extant_bands)
+
+
+    def filepath(self, band):
+        '''
+        '''
+
+        if self.exists and band not in self.filepaths:
+            raise ValueError('No data for band %02d' % band)
+    
+        if band in self.filepaths:
+            filepath = self.filepaths[band]
+        else:
+            filepath = os.path.join(self.path, 'OR_ABI-L1b-RadC-M6C%02d.tif' % band)
+        return filepath
