@@ -206,6 +206,10 @@ class LandsatScene(Dataset):
 
 
     def filepath(self, band=None):
+        '''
+        Construct the filepath given a band (and the scene name)
+        (Note that filepath construction is the same for raw data and derived data)
+        '''
         
         if band is None:
             raise ValueError('A band must be provided')
@@ -222,8 +226,8 @@ class GOESScene(Dataset):
     Filename convention for GOES ABI L1b data
     (see https://www.goes-r.gov/users/docs/PUG-L1b-vol3.pdf)
 
-    Example filename
-    OR_ABI-L1b-RadC-M6C03_G17_s20192431401196_e20192431403569_c20192431404008.nc
+    Example filename:
+    'OR_ABI-L1b-RadC-M6C03_G17_s20192431401196_e20192431403569_c20192431404008.nc'
 
     OR       Operational real-time data
     ABI-L1b  Advanced Baseline Imager Level 1b
@@ -233,20 +237,20 @@ class GOESScene(Dataset):
     C03      Band number
     G17      GOES-17
 
-    Timestamps (4 digit year, 3 digit day of year, hour, minute, second, tenth second)
+    Timestamps (year, day of year, hour, minute, second, tenth second)
     sYYYYJJJHHMMSSZ - Scan start
     eYYYYJJJHHMMSSZ - Scan end
     cYYYYJJJHHMMSSZ - File creation
 
     Band details (for visible and near-IR bands only)
     -------------------------------------------------
-    Band  Res (km)   Wavelength   Spectrum   Name
-    01	  1          0.47µm	    Visible	    Blue
-    02	  0.5        0.64µm	    Visible	    Red
-    03	  1	        0.86µm	    Near-IR	    Veggie
-    04	  2	        1.37µm	    Near-IR	    Cirrus
-    05	  1	        1.60µm	    Near-IR	    Snow/Ice
-    06	  2	        2.24µm	    Near-IR	    Cloud PArticle Size
+    Band  Res (km)   Wavelength   Spectrum    Name
+    01	  1          0.47µm	      Visible	  Blue
+    02	  0.5        0.64µm	      Visible	  Red
+    03	  1	         0.86µm	      Near-IR	  Veggie
+    04	  2	         1.37µm	      Near-IR	  Cirrus
+    05	  1	         1.60µm	      Near-IR	  Snow/Ice
+    06	  2	         2.24µm	      Near-IR	  Cloud Particle Size
 
     '''
 
@@ -284,6 +288,9 @@ class GOESScene(Dataset):
 
     def filepath(self, band):
         '''
+        Note that, for raw datasets, we cannot determine the filepath from the band
+        (as we can for Landsat scenes) because of the unknown and variable timestamps 
+        present in the raw data filenames
         '''
 
         if self.exists and band not in self.filepaths:
